@@ -1,0 +1,1202 @@
+using Unity.Burst;
+using Unity.Entities;
+using Unity.NetCode;
+using Unity.Mathematics;
+using Unity.Physics;
+using Unity.Transforms;
+
+namespace Samples.HelloNetcode
+{
+    // Timer to track when to destroy the explosion effect left by a grenade
+    public struct ExplosionData : IComponentData
+    {
+        public float Timer;
+    }
+
+    // Track the position of grenades on clients here, to play the explosion effect when they are destroyed (this
+    // will also delete the transform data and thus it needs recording separately)
+    public struct GrenadeClientCleanupData : ICleanupComponentData
+    {
+        public float3 Position;
+    }
+
+    // Server only system which handles the grenade behaviour, destroy when timer runs out and push close physics objects away
+    [WorldSystemFilter(WorldSystemFilterFlags.ServerSimulation)]
+    [UpdateInGroup(typeof(HelloNetcodePredictedSystemGroup))]
+    [UpdateAfter(typeof(GrenadeLauncherSystem))]
+    [BurstCompile]
+    public partial struct GrenadeSystem : ISystem
+    {
+        [BurstCompile]
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<EnablePredictedSpawning>();
+        }
+
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            var commandBuffer = new EntityCommandBuffer(state.WorldUpdateAllocator);
+            var time = state.WorldUnmanaged.Time.ElapsedTime;
+            var config = SystemAPI.GetSingleton<GrenadeConfig>();
+            foreach (var (data, grenadeTransform, entity) in SystemAPI.Query<RefRO<GrenadeData>, RefRO<LocalTransform>>().WithAll<Simulate>().WithEntityAccess())
+            {
+                // Destroy the grenade when it reaches the end of it's timer
+                if (time > data.ValueRO.DestroyTimer)
+                {
+                    // Calculate which objects are within the blast radius of the grenade and apply explosion effect on
+                    // them based on distance. The further away the grenade the less affected by the blast.
+                    foreach (var (velocity, transform) in SystemAPI.Query<RefRW<PhysicsVelocity>, RefRO<LocalTransform>>().WithAll<Simulate>())
+                    {
+                        var diff = transform.ValueRO.Position - grenadeTransform.ValueRO.Position;
+                        var distanceSqrt = math.lengthsq(diff);
+                        if (distanceSqrt < config.BlastRadius && distanceSqrt != 0)
+                        {
+                            var scaledPower = 1.0f - distanceSqrt / config.BlastRadius;
+                            velocity.ValueRW.Linear = config.BlastPower * scaledPower * (diff / math.sqrt(distanceSqrt));
+                        }
+                    }
+                    commandBuffer.DestroyEntity(entity);
+                }
+            }
+            commandBuffer.Playback(state.EntityManager);
+        }
+    }
+
+    [UpdateInGroup(typeof(HelloNetcodePredictedSystemGroup))]
+    // Handle the rotation (up/down) of the grenade launcher, runs on both client and server as this is required
+    // to figure out the spawn point of the grenade
+    [BurstCompile]
+    public partial struct GrenadeLauncherSystem : ISystem
+    {
+        [BurstCompile]
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<EnablePredictedSpawning>();
+            state.RequireForUpdate<NetworkId>();
+        }
+
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            var commandBuffer = new EntityCommandBuffer(state.WorldUpdateAllocator);
+            foreach (var (character, anchorPoint) in SystemAPI.Query<CharacterAspect, RefRO<AnchorPoint>>().WithAll<Simulate>())
+            {
+                // This is the weapon slot and rotating that will make the launcher move correctly (it's anchored on the end)
+                var grenadeLauncher = anchorPoint.ValueRO.WeaponSlot;
+                var followCameraRotation = quaternion.RotateX(-character.Input.Pitch);
+
+                var transform = state.EntityManager.GetComponentData<LocalTransform>(grenadeLauncher);
+                commandBuffer.SetComponent(grenadeLauncher, transform.WithRotation(followCameraRotation));
+
+            }
+            commandBuffer.Playback(state.EntityManager);
+        }
+    }
+
+    // Handle client only behaviour needed to support the grenade explosions
+    [UpdateInGroup(typeof(HelloNetcodeSystemGroup))]
+    [WorldSystemFilter(WorldSystemFilterFlags.ClientSimulation)]
+    [BurstCompile]
+    public partial struct ExplosionSystem : ISystem
+    {
+        [BurstCompile]
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<EnablePredictedSpawning>();
+        }
+
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            var commandBuffer = new EntityCommandBuffer(state.WorldUpdateAllocator);
+            var time = state.WorldUnmanaged.Time.ElapsedTime;
+            var explosionPrefab = SystemAPI.GetSingleton<GrenadeSpawner>().Explosion;
+            var config = SystemAPI.GetSingleton<GrenadeConfig>();
+
+            // Add the grenade cleanup component to all grenades when they've arrived in a ghost snapshot (so server has also spawned
+            // it), otherwise we might track invalid mis-predicted ghost spawns
+            foreach (var (grenadeData,entity) in SystemAPI.Query<RefRO<GrenadeData>>().WithNone<PredictedGhostSpawnRequest>().WithNone<GrenadeClientCleanupData>().WithEntityAccess())
+            {
+                commandBuffer.AddComponent<GrenadeClientCleanupData>(entity);
+            }
+
+            // Record the grenade position every frame so it can be used when instantiating the explosion effect
+            foreach (var (transform, grenadeData) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<GrenadeClientCleanupData>>())
+            {
+                grenadeData.ValueRW.Position = transform.ValueRO.Position;
+            }
+
+            // When a grenade is destroyed (GrenadeData deleted) we'll still see the system component and spawn an explosion
+            // effect based on that
+            foreach (var (grenade, entity) in SystemAPI.Query<RefRO<GrenadeClientCleanupData>>().WithNone<GrenadeData>().WithEntityAccess())
+            {
+                var explosion = commandBuffer.Instantiate(explosionPrefab);
+
+                commandBuffer.SetComponent(explosion, LocalTransform.FromPosition(grenade.ValueRO.Position));
+
+                commandBuffer.AddComponent(explosion, new ExplosionData(){Timer = (float)time + config.ExplosionTimer});
+                commandBuffer.RemoveComponent<GrenadeClientCleanupData>(entity);
+            }
+
+            // The explosion particle systems need to be destroyed manually when one loop has finished
+            foreach (var (explosionData, entity) in SystemAPI.Query<RefRO<ExplosionData>>().WithAll<Simulate>().WithEntityAccess())
+            {
+                if (explosionData.ValueRO.Timer < time)
+                    commandBuffer.DestroyEntity(entity);
+            }
+            commandBuffer.Playback(state.EntityManager);
+        }
+    }
+}
+using Unity.Entities;
+using UnityEngine;
+
+namespace Samples.HelloNetcode
+{
+    public struct GrenadeSpawner : IComponentData
+    {
+        public Entity Grenade;
+        public Entity Explosion;
+    }
+
+    [DisallowMultipleComponent]
+    public class GrenadeSpawnerAuthoring : MonoBehaviour
+    {
+        public GameObject Grenade;
+        public GameObject Explosion;
+
+        class Baker : Baker<GrenadeSpawnerAuthoring>
+        {
+            public override void Bake(GrenadeSpawnerAuthoring authoring)
+            {
+                var entity = GetEntity(TransformUsageFlags.Dynamic);
+                AddComponent(entity, new GrenadeSpawner
+                {
+                    Grenade = GetEntity(authoring.Grenade, TransformUsageFlags.Dynamic),
+                    Explosion = GetEntity(authoring.Explosion, TransformUsageFlags.Dynamic)
+                });
+            }
+        }
+    }
+}
+using Unity.Entities;
+using Unity.NetCode;
+using UnityEngine;
+
+namespace Samples.HelloNetcode
+{
+    [GhostComponent(PrefabType = GhostPrefabType.AllPredicted)]
+    public struct GrenadeData : IComponentData
+    {
+        [GhostField]
+        public uint SpawnId;
+
+        public float DestroyTimer;
+    }
+
+    public class GrenadeDataAuthoring : MonoBehaviour
+    {
+        class Baker : Baker<GrenadeDataAuthoring>
+        {
+            public override void Bake(GrenadeDataAuthoring authoring)
+            {
+                var entity = GetEntity(TransformUsageFlags.Dynamic);
+                AddComponent<GrenadeData>(entity);
+            }
+        }
+    }
+}
+using Unity.Entities;
+using UnityEngine;
+
+namespace Samples.HelloNetcode
+{
+    public struct GrenadeConfig : IComponentData
+    {
+        public int InitialVelocity;
+        public float BlastTimer;
+        public int BlastRadius;
+        public int BlastPower;
+        public float ExplosionTimer;
+    }
+
+    [DisallowMultipleComponent]
+    public class GrenadeConfigAuthoring : MonoBehaviour
+    {
+        public int InitialVelocity = 15;
+        public float BlastTimer = 3f;
+        public int BlastRadius = 40;
+        public int BlastPower = 10;
+        public float ExplosionTimer = 1.9f;
+
+        class Baker : Baker<GrenadeConfigAuthoring>
+        {
+            public override void Bake(GrenadeConfigAuthoring authoring)
+            {
+                var entity = GetEntity(TransformUsageFlags.Dynamic);
+                AddComponent(entity, new GrenadeConfig
+                {
+                    InitialVelocity = authoring.InitialVelocity,
+                    BlastTimer = authoring.BlastTimer,
+                    BlastRadius = authoring.BlastRadius,
+                    BlastPower = authoring.BlastPower,
+                    ExplosionTimer = authoring.ExplosionTimer
+                });
+            }
+        }
+    }
+}
+using Unity.Entities;
+using UnityEngine;
+
+namespace Samples.HelloNetcode
+{
+    public struct EnablePredictedSpawning : IComponentData { }
+
+    public class EnablePredictedSpawningAuthoring : MonoBehaviour
+    {
+        class Baker : Baker<EnablePredictedSpawningAuthoring>
+        {
+            public override void Bake(EnablePredictedSpawningAuthoring authoring)
+            {
+                var entity = GetEntity(TransformUsageFlags.Dynamic);
+                AddComponent<EnablePredictedSpawning>(entity);
+            }
+        }
+    }
+}
+using Unity.Burst;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+using Unity.NetCode;
+
+namespace Samples.HelloNetcode
+{
+    [WorldSystemFilter(WorldSystemFilterFlags.ClientSimulation)]
+    [UpdateInGroup(typeof(PresentationSystemGroup))]
+    [BurstCompile]
+    partial struct CharacterControllerCameraSystem : ISystem
+    {
+        public static readonly float3 k_CameraOffset = new float3(0, 2, -5);
+
+        [BurstCompile]
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<EnableCharacterController>();
+            state.RequireForUpdate<NetworkStreamInGame>();
+            state.RequireForUpdate<Character>();
+        }
+
+        public void OnUpdate(ref SystemState state)
+        {
+            var camera = UnityEngine.Camera.main;
+            //We need to access the LocalToWorld matrix to match the position of the player in term of presentation.
+            //Because Physics can be either Interpolated or Predicted, we the LocalToWorld can be different than the real world position
+            //of the entity.
+            foreach (var (localToWorld, input) in SystemAPI.Query<RefRO<LocalToWorld>, RefRO<CharacterControllerPlayerInput>>().WithAll<GhostOwnerIsLocal>())
+            {
+                camera.transform.rotation = math.mul(quaternion.RotateY(input.ValueRO.Yaw), quaternion.RotateX(-input.ValueRO.Pitch));
+                var offset = math.rotate(camera.transform.rotation, k_CameraOffset);
+                camera.transform.position = localToWorld.ValueRO.Position + offset;
+            }
+        }
+    }
+}
+using Unity.Entities;
+using Unity.Burst;
+using Unity.Transforms;
+using Unity.Physics;
+using Unity.Mathematics;
+using Unity.Profiling;
+using Unity.Collections;
+using Unity.NetCode;
+using Unity.Physics.Systems;
+
+namespace Samples.HelloNetcode
+{
+    public struct CharacterControllerConfig : IComponentData
+    {
+        public float Speed;
+        public float JumpSpeed;
+        public float Gravity;
+    }
+
+    public struct Character : IComponentData
+    {
+        public Entity ControllerConfig;
+
+        [GhostField(Quantization = 1000)]
+        public float3 Velocity;
+        [GhostField]
+        public byte OnGround;
+        [GhostField]
+        public NetworkTick JumpStart;
+    }
+    public readonly partial struct CharacterAspect : IAspect
+    {
+        public readonly Entity Self;
+        public readonly RefRW<LocalTransform> Transform;
+
+        readonly RefRO<AutoCommandTarget> m_AutoCommandTarget;
+        readonly RefRW<Character> m_Character;
+        readonly RefRW<PhysicsVelocity> m_Velocity;
+        readonly RefRO<CharacterControllerPlayerInput> m_Input;
+        readonly RefRO<GhostOwner> m_Owner;
+
+        public AutoCommandTarget AutoCommandTarget => m_AutoCommandTarget.ValueRO;
+        public CharacterControllerPlayerInput Input => m_Input.ValueRO;
+        public int OwnerNetworkId => m_Owner.ValueRO.NetworkId;
+        public ref Character Character => ref m_Character.ValueRW;
+        public ref PhysicsVelocity Velocity => ref m_Velocity.ValueRW;
+    }
+   
+    [UpdateBefore(typeof(PhysicsInitializeGroup))]
+    [BurstCompile]
+    partial struct CharacterControllerSystem : ISystem
+    {
+        const float k_DefaultTau = 0.4f;
+        const float k_DefaultDamping = 0.9f;
+        const float k_DefaultSkinWidth = 0f;
+        const float k_DefaultContactTolerance = 0.1f;
+        const float k_DefaultMaxSlope = 60f;
+        const float k_DefaultMaxMovementSpeed = 10f;
+        const int k_DefaultMaxIterations = 10;
+        const float k_DefaultMass = 1f;
+
+        private ProfilerMarker m_MarkerGroundCheck;
+        private ProfilerMarker m_MarkerStep;
+
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<PhysicsWorldSingleton>();
+            state.RequireForUpdate<NetworkTime>();
+            state.RequireForUpdate<Character>();
+
+            m_MarkerGroundCheck = new Unity.Profiling.ProfilerMarker("GroundCheck");
+            m_MarkerStep = new Unity.Profiling.ProfilerMarker("Step");
+        }
+
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            state.CompleteDependency();
+
+            var physicsWorldSingleton = SystemAPI.GetSingleton<PhysicsWorldSingleton>();
+            if (!HasPhysicsWorldBeenInitialized(physicsWorldSingleton))
+            {
+                return;
+            }
+            var networkTime = SystemAPI.GetSingleton<NetworkTime>();
+
+            foreach (var character in SystemAPI.Query<CharacterAspect>().WithAll<Simulate>())
+            {
+                if (!character.AutoCommandTarget.Enabled)
+                {
+                    character.Velocity.Linear = float3.zero;
+                    return;
+                }
+
+                var controllerConfig = SystemAPI.GetComponent<CharacterControllerConfig>(character.Character.ControllerConfig);
+                var controllerCollider = SystemAPI.GetComponent<PhysicsCollider>(character.Character.ControllerConfig);
+
+                // Character step input
+                CharacterControllerUtilities.CharacterControllerStepInput stepInput = new CharacterControllerUtilities.CharacterControllerStepInput
+                {
+                    PhysicsWorldSingleton = physicsWorldSingleton,
+                    DeltaTime = SystemAPI.Time.DeltaTime,
+                    Up = new float3(0, 1, 0),
+                    Gravity = new float3(0, -controllerConfig.Gravity, 0),
+                    MaxIterations = k_DefaultMaxIterations,
+                    Tau = k_DefaultTau,
+                    Damping = k_DefaultDamping,
+                    SkinWidth = k_DefaultSkinWidth,
+                    ContactTolerance = k_DefaultContactTolerance,
+                    MaxSlope = math.radians(k_DefaultMaxSlope),
+                    RigidBodyIndex = physicsWorldSingleton.PhysicsWorld.GetRigidBodyIndex(character.Self),
+                    CurrentVelocity = character.Character.Velocity,
+                    MaxMovementSpeed = k_DefaultMaxMovementSpeed
+                };
+
+                //Using local position here is fine, because the character controller does not have any parent.
+                //Using the Position is wrong because it is not up to date. (the LocalTransform is synchronized but
+                //the world transform isn't).
+                RigidTransform ccTransform = new RigidTransform()
+                {
+                    pos = character.Transform.ValueRO.Position,
+                    rot = quaternion.identity
+                };
+
+                m_MarkerGroundCheck.Begin();
+                CharacterControllerUtilities.CheckSupport(
+                    in physicsWorldSingleton,
+                    ref controllerCollider,
+                    stepInput,
+                    ccTransform,
+                    out CharacterControllerUtilities.CharacterSupportState supportState,
+                    out _,
+                    out _);
+                m_MarkerGroundCheck.End();
+
+                float2 input = character.Input.Movement;
+                float3 wantedMove = new float3(input.x, 0, input.y) * controllerConfig.Speed * SystemAPI.Time.DeltaTime;
+
+                // Wanted movement is relative to camera
+                wantedMove = math.rotate(quaternion.RotateY(character.Input.Yaw), wantedMove);
+
+                float3 wantedVelocity = wantedMove / SystemAPI.Time.DeltaTime;
+                wantedVelocity.y = character.Character.Velocity.y;
+
+                if (supportState == CharacterControllerUtilities.CharacterSupportState.Supported)
+                {
+                    character.Character.JumpStart = NetworkTick.Invalid;
+                    character.Character.OnGround = 1;
+                    character.Character.Velocity = wantedVelocity;
+                    // Allow jump and stop falling when grounded
+                    if (character.Input.Jump.IsSet)
+                    {
+                        character.Character.Velocity.y = controllerConfig.JumpSpeed;
+                        character.Character.JumpStart = networkTime.ServerTick;
+                    }
+                    else
+                        character.Character.Velocity.y = 0;
+                }
+                else
+                {
+                    character.Character.OnGround = 0;
+                    // Free fall
+                    character.Character.Velocity.y -= controllerConfig.Gravity * SystemAPI.Time.DeltaTime;
+                }
+
+                m_MarkerStep.Begin();
+                // Ok because affect bodies is false so no impulses are written
+                NativeStream.Writer deferredImpulseWriter = default;
+                CharacterControllerUtilities.CollideAndIntegrate(stepInput, k_DefaultMass, false, ref controllerCollider, ref ccTransform, ref character.Character.Velocity, ref deferredImpulseWriter);
+                m_MarkerStep.End();
+
+                // Set the physics velocity and let physics move the kinematic object based on that
+                character.Velocity.Linear = (ccTransform.pos - character.Transform.ValueRO.Position) / SystemAPI.Time.DeltaTime;
+            }
+        }
+
+        /// <summary>
+        /// As we run before <see cref="PhysicsInitializeGroup"/> it is possible to execute before any physics bodies
+        /// has been initialized.
+        ///
+        /// There may be a better way to do this.
+        /// </summary>
+        static bool HasPhysicsWorldBeenInitialized(PhysicsWorldSingleton physicsWorldSingleton)
+        {
+            return physicsWorldSingleton.PhysicsWorld.Bodies is { IsCreated: true, Length: > 0 };
+        }
+    }
+}
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.NetCode;
+using Unity.NetCode.Samples.Common;
+using UnityEngine;
+
+namespace Samples.HelloNetcode
+{
+    [GhostComponent(PrefabType=GhostPrefabType.AllPredicted, OwnerSendType = SendToOwnerType.SendToNonOwner)]
+    public struct CharacterControllerPlayerInput : IInputComponentData
+    {
+        [GhostField] public float2 Movement;
+        [GhostField] public InputEvent Jump;
+        [GhostField] public InputEvent PrimaryFire;
+        [GhostField] public InputEvent SecondaryFire;
+        [GhostField] public float Pitch;
+        [GhostField] public float Yaw;
+    }
+
+    [UpdateInGroup(typeof(HelloNetcodeInputSystemGroup))]
+    [WorldSystemFilter(WorldSystemFilterFlags.ClientSimulation)]
+    public partial struct SampleCharacterControllerPlayerInputSystem : ISystem
+    {
+        bool m_WasJumpTouch;
+        bool m_WasFireTouch;
+        bool m_WasSecondaryFireTouch;
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<CharacterControllerPlayerInput>();
+            state.RequireForUpdate<NetworkStreamInGame>();
+        }
+        public void OnUpdate(ref SystemState state)
+        {
+            foreach (var input in SystemAPI.Query<RefRW<CharacterControllerPlayerInput>>().WithAll<GhostOwnerIsLocal>())
+            {
+                input.ValueRW.Movement = default;
+                input.ValueRW.Jump = default;
+                input.ValueRW.PrimaryFire = default;
+                input.ValueRW.SecondaryFire = default;
+                if (TouchInput.GetKey(TouchInput.KeyCode.LeftStick))
+                    input.ValueRW.Movement = TouchInput.GetStick(TouchInput.StickCode.LeftStick);
+                else
+                {
+                    if (Input.GetKey("left") || Input.GetKey("a"))
+                        input.ValueRW.Movement.x -= 1;
+                    if (Input.GetKey("right") || Input.GetKey("d"))
+                        input.ValueRW.Movement.x += 1;
+                    if (Input.GetKey("down") || Input.GetKey("s"))
+                        input.ValueRW.Movement.y -= 1;
+                    if (Input.GetKey("up") || Input.GetKey("w"))
+                        input.ValueRW.Movement.y += 1;
+                }
+                var jumpTouch = TouchInput.GetKey(TouchInput.KeyCode.Space);
+                if (Input.GetKeyDown("space") || (jumpTouch && !m_WasJumpTouch))
+                    input.ValueRW.Jump.Set();
+                m_WasJumpTouch = jumpTouch;
+
+                float2 lookDelta = float2.zero;
+                if (TouchInput.GetKey(TouchInput.KeyCode.RightStick))
+                {
+                    lookDelta = TouchInput.GetStick(TouchInput.StickCode.RightStick) * SystemAPI.Time.DeltaTime;
+                }
+                #if !UNITY_IOS && !UNITY_ANDROID
+                else
+                {
+                    lookDelta = new float2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
+                }
+                #endif
+                input.ValueRW.Pitch = math.clamp(input.ValueRW.Pitch+lookDelta.y, -math.PI/2, math.PI/2);
+                input.ValueRW.Yaw = math.fmod(input.ValueRW.Yaw + lookDelta.x, 2*math.PI);
+
+                var fireTouch = TouchInput.GetKey(TouchInput.KeyCode.Left);
+                var secondaryFireTouch = TouchInput.GetKey(TouchInput.KeyCode.Right);
+                if ((fireTouch && !m_WasFireTouch)
+                #if !UNITY_IOS && !UNITY_ANDROID
+                    || Input.GetKeyDown(KeyCode.Mouse0)
+                #endif
+                    )
+                {
+                    input.ValueRW.PrimaryFire.Set();
+                }
+                if ((secondaryFireTouch && !m_WasSecondaryFireTouch)
+                #if !UNITY_IOS && !UNITY_ANDROID
+                    || Input.GetKeyDown(KeyCode.Mouse1)
+                #endif
+                    )
+                {
+                    input.ValueRW.SecondaryFire.Set();
+                }
+                m_WasFireTouch = fireTouch;
+                m_WasSecondaryFireTouch = secondaryFireTouch;
+            }
+        }
+    }
+}
+using System;
+using Unity.Burst;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Physics;
+using Unity.Rendering;
+using Unity.Transforms;
+using Unity.NetCode;
+
+namespace Samples.HelloNetcode
+{
+    // Counter for each fire command processed so it can alternate colors
+    public struct FireCounter : IComponentData
+    {
+        public int Value;
+    }
+    public struct ActiveAnchor : IComponentData
+    {
+        public int Value;
+    }
+    // Handle the fire input events type specifically
+    [UpdateInGroup(typeof(HelloNetcodePredictedSystemGroup))]
+    [BurstCompile]
+    public partial struct ProcessFireCommandsSystem : ISystem
+    {
+        [BurstCompile]
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<EnablePredictedSpawning>();
+            state.RequireForUpdate<CharacterControllerPlayerInput>();
+            state.RequireForUpdate<GrenadeSpawner>();
+            state.EntityManager.CreateSingleton<FireCounter>();
+            state.EntityManager.CreateSingleton<ActiveAnchor>();
+        }
+
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            // Since this is only handling the fire inputs which spawn grenades we'll only want to predict the spawn one time
+            // (or we'd get lots of grenades spawned for one instance as the prediction for a tick can run multiple times)
+            var networkTime = SystemAPI.GetSingleton<NetworkTime>();
+            if (!networkTime.IsFirstTimeFullyPredictingTick)
+                return;
+
+            var config = SystemAPI.GetSingleton<GrenadeConfig>();
+            var commandBuffer = new EntityCommandBuffer(state.WorldUpdateAllocator);
+            var grenadePrefab = SystemAPI.GetSingleton<GrenadeSpawner>().Grenade;
+            var fireCounter = SystemAPI.GetSingleton<FireCounter>();
+            var fireCounterEntity = SystemAPI.GetSingletonEntity<FireCounter>();
+            var localToWorldTransformLookup = SystemAPI.GetComponentLookup<LocalToWorld>(true);
+            var time = state.WorldUnmanaged.Time.ElapsedTime;
+            var isClient = state.WorldUnmanaged.IsClient();
+            var v = 0;
+            var activeAnchor = SystemAPI.GetSingleton<ActiveAnchor>();
+            var activeAnchorEntity = SystemAPI.GetSingletonEntity<ActiveAnchor>();
+            foreach (var (character, inputBuffer, anchorPoint, anchorPoint2) in SystemAPI.Query<CharacterAspect, DynamicBuffer<HelloNetcodeSamples.Generated.CharacterControllerPlayerInputInputBufferData>, RefRO<AnchorPoint>, RefRO<AnchorPoint2>> ().WithAll<Simulate>())
+            {
+         
+                v = v + 1;  
+                if (character.Input.SecondaryFire.IsSet)
+                {
+                       UnityEngine.Debug.Log(fireCounter.Value);
+                        
+                    var grenadeEntity = commandBuffer.Instantiate(grenadePrefab);
+                    UnityEngine.Debug.Log(anchorPoint.ValueRO.SpawnPoint);
+
+                    Entity spawnPoint = anchorPoint.ValueRO.SpawnPoint;
+                    if (fireCounter.Value % 2 == 0)
+                        spawnPoint = anchorPoint2.ValueRO.SpawnPoint;
+                    // The spawn point is nested 3 levels deep on the player (slot->launcher->spawnPoint) but element 0 is the root entity
+                 
+    
+
+                    var grenadeSpawnPosition = localToWorldTransformLookup[spawnPoint].Position;
+                    var grenadeSpawnRotation = localToWorldTransformLookup[spawnPoint].Rotation;
+
+                    // Set the spawn location at the grenade spawn position and with it's rotation but in world coordinates since it's not a child of the player
+
+                    commandBuffer.SetComponent(grenadeEntity, LocalTransform.FromPositionRotation(grenadeSpawnPosition, grenadeSpawnRotation));
+
+
+                    // Launch the grenade by setting the physics linear velocity in the forward direction with the configured initial velocity
+                    var initialVelocity = new PhysicsVelocity();
+                    initialVelocity.Linear = localToWorldTransformLookup[spawnPoint].Forward * config.InitialVelocity;
+                    commandBuffer.SetComponent(grenadeEntity, initialVelocity);
+
+                    var grenadeData = new GrenadeData() {DestroyTimer = (float)time + config.BlastTimer};
+
+                    // Set the spawn ID for this particular local spawn so it can be used later in the classification system
+                    // Needs to include the network ID of the owner since everyone's counters/spawnId starts at 1
+                    inputBuffer.GetDataAtTick(networkTime.ServerTick, out var inputForTick);
+                    grenadeData.SpawnId = (uint)((uint)(inputForTick.InternalInput.PrimaryFire.Count << 11) | (uint)character.OwnerNetworkId);
+                    commandBuffer.SetComponent(grenadeEntity, grenadeData);
+
+                    // Set the owner so the prediction will work (important until it's replaced by it's interpolated version)
+                   // commandBuffer.SetComponent(grenadeEntity, new GhostOwner {NetworkId = character.OwnerNetworkId});
+
+                    // Set the color on the grenade so it alternates between red and green
+                    if (state.WorldUnmanaged.IsClient())
+                    {
+                        if (fireCounter.Value % 2 == 1)
+                            commandBuffer.SetComponent(grenadeEntity, new URPMaterialPropertyBaseColor() { Value = new float4(1, 0, 0, 1) });
+                        else
+                            commandBuffer.SetComponent(grenadeEntity, new URPMaterialPropertyBaseColor() { Value = new float4(0, 1, 0, 1) });
+                    }
+                    commandBuffer.SetComponent(fireCounterEntity, new FireCounter(){Value = fireCounter.Value + 1});
+                }
+            }
+            commandBuffer.Playback(state.EntityManager);
+        }
+    }
+}
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.NetCode;
+using Unity.NetCode.LowLevel;
+
+namespace Samples.HelloNetcode
+{
+    [WorldSystemFilter(WorldSystemFilterFlags.ClientSimulation)]
+    [UpdateInGroup(typeof(GhostSimulationSystemGroup))]
+    [UpdateAfter(typeof(GhostSpawnClassificationSystem))]
+    [BurstCompile]
+    public partial struct ClassificationSystem : ISystem
+    {
+        SnapshotDataLookupHelper m_SnapshotDataLookupHelper;
+        BufferLookup<PredictedGhostSpawn> m_PredictedGhostSpawnLookup;
+        ComponentLookup<GrenadeData> m_GrenadeDataLookup;
+        // The ghost type (grenade) this classification system will process
+        int m_GhostType;
+
+        [BurstCompile]
+        public void OnCreate(ref SystemState state)
+        {
+            m_SnapshotDataLookupHelper = new SnapshotDataLookupHelper(ref state);
+            m_PredictedGhostSpawnLookup = state.GetBufferLookup<PredictedGhostSpawn>();
+            m_GrenadeDataLookup = state.GetComponentLookup<GrenadeData>();
+            state.RequireForUpdate<GhostSpawnQueue>();
+            state.RequireForUpdate<PredictedGhostSpawnList>();
+            state.RequireForUpdate<NetworkId>();
+            state.RequireForUpdate<GrenadeSpawner>();
+        }
+
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            if (m_GhostType == 0)
+            {
+                // Lookup the grenade prefab entity in the ghost prefab list, from there we can find the ghost type for this prefab
+                var prefabEntity = SystemAPI.GetSingleton<GrenadeSpawner>().Grenade;
+                var collectionEntity = SystemAPI.GetSingletonEntity<GhostCollection>();
+                var ghostPrefabTypes = state.EntityManager.GetBuffer<GhostCollectionPrefab>(collectionEntity);
+                for (int i = 0; i < ghostPrefabTypes.Length; ++i)
+                {
+                    if (ghostPrefabTypes[i].GhostPrefab == prefabEntity)
+                        m_GhostType = ghostPrefabTypes[i].GhostType.GetHashCode();
+                }
+            }
+            m_SnapshotDataLookupHelper.Update(ref state);
+            m_PredictedGhostSpawnLookup.Update(ref state);
+            m_GrenadeDataLookup.Update(ref state);
+            var ghostCollection = SystemAPI.GetSingletonEntity<GhostCollection>();
+            var classificationJob = new ClassificationJob
+            {
+                ghostMap = SystemAPI.GetSingleton<SpawnedGhostEntityMap>().Value,
+                snapshotDataLookupHelper = m_SnapshotDataLookupHelper,
+                ghostCollectionSingleton = ghostCollection,
+                spawnListEntity = SystemAPI.GetSingletonEntity<PredictedGhostSpawnList>(),
+                PredictedSpawnListLookup = m_PredictedGhostSpawnLookup,
+                grenadeDataLookup = m_GrenadeDataLookup,
+                ghostType = m_GhostType
+            };
+            state.Dependency = classificationJob.Schedule(state.Dependency);
+        }
+
+        [WithAll(typeof(GhostSpawnQueue))]
+        [BurstCompile]
+        partial struct ClassificationJob : IJobEntity
+        {
+            public NativeParallelHashMap<SpawnedGhost, Entity>.ReadOnly ghostMap;
+            public SnapshotDataLookupHelper snapshotDataLookupHelper;
+            public Entity ghostCollectionSingleton;
+            public Entity spawnListEntity;
+            public BufferLookup<PredictedGhostSpawn> PredictedSpawnListLookup;
+            public ComponentLookup<GrenadeData> grenadeDataLookup;
+            public int ghostType;
+
+            public void Execute(DynamicBuffer<GhostSpawnBuffer> ghosts, DynamicBuffer<SnapshotDataBuffer> data)
+            {
+                var inspector = snapshotDataLookupHelper.CreateSnapshotBufferLookup(ghostCollectionSingleton, ghostMap);
+                var predictedSpawnList = PredictedSpawnListLookup[spawnListEntity];
+                for (int i = 0; i < ghosts.Length; ++i)
+                {
+                    var newGhostSpawn = ghosts[i];
+                    if (newGhostSpawn.SpawnType != GhostSpawnBuffer.Type.Predicted || newGhostSpawn.HasClassifiedPredictedSpawn || newGhostSpawn.PredictedSpawnEntity != Entity.Null)
+                        continue;
+
+                    // Mark all the grenade spawns as classified even if not our own predicted spawns
+                    // otherwise spawns from other players might be picked up by the default classification system when
+                    // it runs when we happen to have a predicted spawn in the predictedSpawnList not yet classified here
+                    UnityEngine.Debug.Log(newGhostSpawn.GhostType);
+                   if (newGhostSpawn.GhostType == ghostType)
+                        newGhostSpawn.HasClassifiedPredictedSpawn = true;
+
+                    // Find new ghost spawns (from ghost snapshot) which match the predict spawned ghost type handled by
+                    // this classification system. Match the spawn ID data from the new spawn (by lookup it up in
+                    // snapshot data) with the spawn IDs of ghosts in the predicted spawn list. When matched we replace
+                    // the ghost entity of that new spawn with our predict spawned entity (so the spawn will not result
+                    // in a new instantiation).
+                    for (int j = 0; j < predictedSpawnList.Length; ++j)
+                    {
+                        if (newGhostSpawn.GhostType == predictedSpawnList[j].ghostType)
+                        {
+                            if (inspector.TryGetComponentDataFromSnapshotHistory(newGhostSpawn.GhostType, data, out GrenadeData grenadeData, i))
+                            {
+                                var spawnIdFromList = grenadeDataLookup[predictedSpawnList[j].entity].SpawnId;
+                                if (grenadeData.SpawnId == spawnIdFromList)
+                                {
+                                    newGhostSpawn.PredictedSpawnEntity = predictedSpawnList[j].entity;
+                                    predictedSpawnList[j] = predictedSpawnList[predictedSpawnList.Length - 1];
+                                    predictedSpawnList.RemoveAt(predictedSpawnList.Length - 1);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    ghosts[i] = newGhostSpawn;
+                }
+            }
+        }
+    }
+}
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+using Unity.NetCode;
+
+namespace Samples.HelloNetcode
+{
+    readonly partial struct CharacterWithHealth : IAspect
+    {
+        readonly RefRW<AutoCommandTarget> m_AutoCommandTarget;
+        readonly RefRO<Health> m_Health;
+        readonly RefRO<GhostOwner> m_GhostOwner;
+        readonly RefRO<ConnectionOwner> m_ConnectionOwner;
+
+        public ref AutoCommandTarget AutoCommandTarget => ref m_AutoCommandTarget.ValueRW;
+        public GhostOwner GhostOwner => m_GhostOwner.ValueRO;
+        public ConnectionOwner ConnectionOwner => m_ConnectionOwner.ValueRO;
+
+        public bool IsAlive()
+        {
+            return m_Health.ValueRO.CurrentHitPoints > 0;
+        }
+    }
+
+    [WorldSystemFilter(WorldSystemFilterFlags.ServerSimulation)]
+    [RequireMatchingQueriesForUpdate]
+    [UpdateInGroup(typeof(HelloNetcodePredictedSystemGroup))]
+    [UpdateAfter(typeof(DamageSystem))]
+    public partial struct RespawnSystem : ISystem
+    {
+        Random m_Random;
+        public void OnCreate(ref SystemState state)
+        {
+            m_Random = new Random((uint)SystemAPI.Time.ElapsedTime + 1);
+            state.RequireForUpdate<Spawner>();
+            state.RequireForUpdate<Health>();
+        }
+
+        public void OnUpdate(ref SystemState state)
+        {
+            var playerPrefab = SystemAPI.GetSingleton<Spawner>().Player;
+            var ecb = new EntityCommandBuffer(Allocator.Temp);
+            var linkedEntityGroupFromEntity = SystemAPI.GetBufferLookup<LinkedEntityGroup>();
+
+            foreach (var (character, localTransform, entity) in SystemAPI.Query<CharacterWithHealth, RefRW<LocalTransform>>().WithEntityAccess())
+            {
+                if (character.IsAlive())
+                {
+                    continue;
+                }
+
+                if (FallingDown(ref character.AutoCommandTarget, ref localTransform.ValueRW.Rotation, SystemAPI.Time.DeltaTime))
+                {
+                    continue;
+                }
+
+                DestroyAndRespawnPlayer(ecb, entity, playerPrefab, character.GhostOwner, character.ConnectionOwner, linkedEntityGroupFromEntity);
+            }
+
+            ecb.Playback(state.EntityManager);
+        }
+
+        void DestroyAndRespawnPlayer(EntityCommandBuffer ecb, Entity entity, Entity playerPrefab, GhostOwner networkId,
+            ConnectionOwner connectionOwner, BufferLookup<LinkedEntityGroup> linkedEntityGroupFromEntity)
+        {
+            ecb.DestroyEntity(entity);
+
+            InitializeNewPlayer(ecb, entity, playerPrefab, networkId, connectionOwner, linkedEntityGroupFromEntity);
+        }
+
+        /// <summary>
+        /// Initialize new player at a random point within the plane. (Hardcoded to [-50;50]).
+        /// To patch up the network components we set CommandTarget as well as removing the destroyed entity
+        /// and adding the new player entity to the linked entity group of the connection entity.
+        /// </summary>
+        void InitializeNewPlayer(EntityCommandBuffer ecb, Entity destroyedPlayer, Entity newPlayer, GhostOwner networkId,
+            ConnectionOwner connectionOwner, BufferLookup<LinkedEntityGroup> linkedEntityGroupFromEntity)
+        {
+            var spawnedPlayer = ecb.Instantiate(newPlayer);
+            ecb.SetComponent(spawnedPlayer, networkId);
+            var newX = m_Random.NextInt(-40, 40);
+            var newZ = m_Random.NextInt(-40, 40);
+
+            ecb.SetComponent(spawnedPlayer, LocalTransform.FromPosition(new float3(newX, 1, newZ)));
+
+
+            ecb.SetComponent(connectionOwner.Entity, new CommandTarget() { targetEntity = spawnedPlayer });
+            ecb.AddComponent(spawnedPlayer, new ConnectionOwner { Entity = connectionOwner.Entity });
+
+            var linkedEntityGroups = linkedEntityGroupFromEntity[connectionOwner.Entity];
+            for (var index = 0; index < linkedEntityGroups.Length; index++)
+            {
+                var linkedEntityGroup = linkedEntityGroups[index];
+                if (linkedEntityGroup.Value == destroyedPlayer)
+                {
+                    linkedEntityGroup.Value = newPlayer;
+                    // linkedEntityGroups[index] = new LinkedEntityGroup { Value = spawnedPlayer };
+                    // linkedEntityGroups.RemoveAtSwapBack(index);
+                    // --index;
+                }
+            }
+
+            // ecb.AppendToBuffer(connectionOwner.Entity, new LinkedEntityGroup { Value = spawnedPlayer });
+        }
+
+        static bool FallingDown(ref AutoCommandTarget autoCommandTarget, ref quaternion rotation, float deltaTime)
+        {
+            autoCommandTarget.Enabled = false;
+            rotation = math.mul(rotation, quaternion.RotateZ(deltaTime));
+            var rotatedLessThan90Degrees = math.mul(rotation, math.up()).y > 0;
+            return rotatedLessThan90Degrees;
+        }
+    }
+}
+using Unity.Entities;
+using Unity.NetCode;
+
+namespace Samples.HelloNetcode
+{
+    [RequireMatchingQueriesForUpdate]
+    [UpdateInGroup(typeof(HelloNetcodePredictedSystemGroup))]
+    [UpdateAfter(typeof(ShootingSystem))]
+    public partial struct DamageSystem : ISystem
+    {
+        public void OnUpdate(ref SystemState state)
+        {
+            var healthFromEntity = SystemAPI.GetComponentLookup<Health>();
+            foreach (var hit in SystemAPI.Query<RefRW<Hit>>())
+            {
+                if (!healthFromEntity.HasComponent(hit.ValueRO.Entity))
+                {
+                    continue;
+                }
+
+                var health = healthFromEntity[hit.ValueRO.Entity];
+                health.CurrentHitPoints -= 20;
+                healthFromEntity[hit.ValueRO.Entity] = health;
+                hit.ValueRW.Entity = Entity.Null;
+            }
+        }
+    }
+}
+using Unity.Entities;
+using Unity.Mathematics;
+using UnityEngine;
+
+namespace Samples.HelloNetcode
+{
+#if !UNITY_DISABLE_MANAGED_COMPONENTS
+    public class HealthBarSpawner : IComponentData
+    {
+        public GameObject HealthBarPrefab;
+        public Vector3 Offset;
+    }
+#endif
+
+    public class HealthBarSpawnerAuthoring : MonoBehaviour
+    {
+        public GameObject HealthBarPrefab;
+        public float3 Offset;
+#if !UNITY_DISABLE_MANAGED_COMPONENTS
+
+        class Baker : Baker<HealthBarSpawnerAuthoring>
+        {
+            public override void Bake(HealthBarSpawnerAuthoring authoring)
+            {
+                var entity = GetEntity(TransformUsageFlags.Dynamic);
+                AddComponentObject(entity, new HealthBarSpawner
+                {
+                    HealthBarPrefab = authoring.HealthBarPrefab,
+                    Offset = authoring.Offset,
+                });
+            }
+        }
+#endif
+    }
+}
+
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.NetCode;
+
+namespace Samples.HelloNetcode
+{
+    [BurstCompile]
+    [RequireMatchingQueriesForUpdate]
+    [WorldSystemFilter(WorldSystemFilterFlags.ServerSimulation)]
+    public partial struct UpdateConnectionPositionSystem : ISystem
+    {
+        public void OnCreate(ref SystemState state)
+        {
+            var grid = state.EntityManager.CreateEntity();
+            var m_ScaleFunctionPointer = GhostDistanceImportance.ScaleFunctionPointer;
+            state.EntityManager.SetName(grid, "GhostImportanceSingleton");
+            state.EntityManager.AddComponentData(grid, new GhostDistanceData
+            {
+                TileSize = new int3(2, 2, 2),
+                TileCenter = new int3(0, 0, 0),
+                TileBorderWidth = new float3(1f, 1f, 1f),
+            });
+            state.EntityManager.AddComponentData(grid, new GhostImportance
+            {
+                ScaleImportanceFunction = m_ScaleFunctionPointer,
+                GhostConnectionComponentType = ComponentType.ReadOnly<GhostConnectionPosition>(),
+                GhostImportanceDataType = ComponentType.ReadOnly<GhostDistanceData>(),
+                GhostImportancePerChunkDataType = ComponentType.ReadOnly<GhostDistancePartitionShared>(),
+            });
+        }
+
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            var ecb = new EntityCommandBuffer(Allocator.Temp);
+            foreach (var (_, entity) in SystemAPI.Query<NetworkId>().WithNone<GhostConnectionPosition>().WithEntityAccess())
+            {
+                ecb.AddComponent(entity, new GhostConnectionPosition
+                {
+                    Position = new float3(),
+                });
+            }
+            ecb.Playback(state.EntityManager);
+        }
+    }
+}
+using Unity.Burst;
+using Unity.Entities;
+using Unity.Transforms;
+
+namespace Samples.HelloNetcode
+{
+    [UpdateInGroup(typeof(HelloNetcodeSystemGroup))]
+    [WorldSystemFilter(WorldSystemFilterFlags.ServerSimulation)]
+    [BurstCompile]
+    public partial struct SpinnerSystem : ISystem
+    {
+        [BurstCompile]
+        partial struct SpinnerJob : IJobEntity
+        {
+            public float DeltaTime;
+
+            [BurstCompile]
+            public void Execute(ref LocalTransform transform)
+            {
+                transform = transform.RotateX(DeltaTime);
+            }
+        }
+
+        [BurstCompile]
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<EnableOptimization>();
+        }
+
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            state.Dependency = new SpinnerJob
+            {
+                DeltaTime = SystemAPI.Time.DeltaTime,
+            }.ScheduleParallel(state.Dependency);
+        }
+    }
+}
+using System;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Mathematics;
+using UnityEngine;
+using UnityEngine.UI;
+using Object = UnityEngine.Object;
+
+namespace Samples.HelloNetcode
+{
+#if !UNITY_DISABLE_MANAGED_COMPONENTS
+    public class HealthUI : IComponentData, IDisposable, ICloneable
+    {
+        public Transform HealthBar;
+        public Image HealthSlider;
+        public float3 Offset;
+        
+        public void Dispose()
+        {
+            //The Healbar is disposed by the client in two cases:
+            //- By the DespawnHealthBarSystem (if the healt < 0)
+            //- When a character is respawn (so the ghost get destroyed). Being the HealthUI this method is called in that case.
+            if (HealthBar != null)
+                Object.Destroy(HealthBar.gameObject);
+        }
+
+        public object Clone()
+        {
+            if (HealthBar == null || HealthBar.gameObject == null)
+                return new HealthUI();
+            var newHealtbar = Object.Instantiate(HealthBar.gameObject);
+            var images = HealthBar.gameObject.GetComponentsInChildren<Image>();
+            return new HealthUI
+            {
+                HealthBar = newHealtbar.GetComponent<Transform>(),
+                HealthSlider = images[1]
+            };
+        }
+    }
+
+    [WorldSystemFilter(WorldSystemFilterFlags.ClientSimulation)]
+    [UpdateInGroup(typeof(PresentationSystemGroup))]
+    public partial struct SpawnHealthBarSystem : ISystem
+    {
+        public void OnCreate(ref SystemState state)
+        {
+            state.RequireForUpdate<HealthBarSpawner>();
+            state.RequireForUpdate<Health>();
+        }
+
+        public void OnUpdate(ref SystemState state)
+        {
+            var ecb = new EntityCommandBuffer(Allocator.Temp);
+            var query = state.EntityManager.CreateEntityQuery(ComponentType.ReadOnly<HealthBarSpawner>());
+            var spawner = query.GetSingleton<HealthBarSpawner>();
+            foreach (var (_, entity) in SystemAPI.Query<RefRO<Health>>()
+                         .WithEntityAccess().WithNone<HealthUI>())
+            {
+                var go = Object.Instantiate(spawner.HealthBarPrefab);
+                var image = go.GetComponentsInChildren<Image>();
+                ecb.AddComponent(entity, new HealthUI
+                {
+                    HealthBar = go.transform,
+                    HealthSlider = image[1],
+                    Offset = spawner.Offset,
+                });
+            }
+            ecb.Playback(state.EntityManager);
+        }
+    }
+#endif
+}
+using Unity.Entities;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Samples.HelloNetcode
+{
+#if !UNITY_DISABLE_MANAGED_COMPONENTS
+    /// <summary>
+    /// Update position and rotation of the health bar above players. This will make sure the health bar follow the character
+    /// character and is always facing the main camera.
+    /// </summary>
+    [WorldSystemFilter(WorldSystemFilterFlags.ClientSimulation)]
+    [UpdateInGroup(typeof(PresentationSystemGroup))]
+    [RequireMatchingQueriesForUpdate]
+    public partial struct UpdateHealthBarSystem : ISystem
+    {
+        public void OnUpdate(ref SystemState state)
+        {
+            if (Camera.main == null)
+            {
+                state.Enabled = false;
+                return;
+            }
+
+            var mainCamera = Camera.main;
+
+            foreach (var (ui, health, ltw) in SystemAPI.Query<HealthUI, RefRO<Health>, RefRO<LocalToWorld>>())
+            {
+                if (health.ValueRO.CurrentHitPoints <= 0)
+                {
+                    continue;
+                }
+                ui.HealthBar.position = ltw.ValueRO.Position + ui.Offset;
+                var n = mainCamera.transform.position - ui.HealthBar.position;
+                ui.HealthBar.rotation = Quaternion.LookRotation(n);
+                ui.HealthSlider.fillAmount = health.ValueRO.CurrentHitPoints / health.ValueRO.MaximumHitPoints;
+            }
+
+        }
+    }
+#endif
+}
