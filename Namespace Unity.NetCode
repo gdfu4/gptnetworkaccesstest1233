@@ -1,0 +1,1052 @@
+Namespace Unity.NetCode
+Classes
+BatchPredictAttribute
+When using MaxPredictionStepBatchSize the client will batch prediction steps, but it will normally break the batches when input changes. If this attribute is placed on an input in the ICommandData / IInputComponentData component changes to the field marked with this attribute will not break batches. This can be used for example to make sure mouse look input changes can be batched while starting to move cannot be batched.
+
+ClientOnlyVariant
+Special universal component variant that can be assigned to any component and/or buffer when configuring the GhostComponentSerializerCollectionSystemGroup. Mostly used for stripping components from the server-side ghost prefabs.
+
+To use this for your own types: Set it as the default in your own RegisterDefaultVariants(Dictionary<ComponentType, DefaultVariantSystemBase.Rule>) method.
+
+ClientServerBootstrap
+ClientServerBootstrap is responsible to configure and create the Server and Client worlds at runtime when the game start (in the editor when entering PlayMode). The ClientServerBootstrap is meant to be a base class for your own custom boostrap code and provides utility methods that make it easy creating the client and server worlds. It also support connecting the client to server automatically, using the AutoConnectPort port and DefaultConnectAddress. For the server, it allow binding the server transport to a specific listening port and address (especially useful when running the server on some cloud provider) via DefaultListenAddress.
+
+ClientServerWorldExtensions
+Netcode specific extension methods for worlds.
+
+CommandDataUtility
+Contains utility methods to add and retrieve commands from ICommandData dynamic buffers.
+
+CommandReceiveSystemGroup
+Group that contains all systems that receives commands. Only present in server world.
+
+CommandSendSystemGroup
+Parent group of all systems that serialize ICommandData structs into the OutgoingCommandDataStreamBuffer buffer. The serialized commands are then sent later by the Unity.NetCode.CommandSendPacketSystem. Only present in client world.
+
+CompareCommandSystemGroup
+This group contains all core-generated system that are used to compare commands for sake of identifing the ticks the client has changed input (see Unity.NetCode.CompareCommandSystemGroup.m_UniqueInputTicks.
+
+DefaultDriverBuilder
+Default helper method implementation for constructing NetworkDriverStore.NetworkDriverInstance, default NetworkSettings and registering these on the NetworkDriverStore.
+
+DefaultSmoothingActionUserParamsAuthoring
+Authoring component which adds the maxDist component to the Entity.
+
+DefaultTranslationSmoothingAction.DefaultStaticUserParams
+The default value for the DefaultSmoothingActionUserParams if the no user data is passed to the function. Position is corrected if the prediction error is at least 1 unit (usually mt) and less than 10 unit (usually mt)
+
+DefaultVariantSystemBase
+DefaultVariantSystemBase is an abstract base class that should be used to update the default variants in GhostComponentSerializerCollectionData, which contains what serialization variant to use (GhostComponentVariationAttribute) for certain type. A concrete implementation must implement the RegisterDefaultVariants(Dictionary<ComponentType, DefaultVariantSystemBase.Rule>) method and add to the dictionary the desired type-variant pairs.
+
+The system must (and will be) created in both runtime and baking worlds. During baking, in particular, the GhostComponentSerializerCollectionSystemGroup is used by the GhostAuthoringBakingSystem to configure the ghost prefabs meta-data with the defaults values.
+
+The abstract base class already has the correct flags / update in world attributes set. It is not necessary for the concrete implementation to specify the flags, nor the WorldSystemFilterAttribute.
+
+CREATION FLOW
+
+All the default variant systems must be created after the GhostComponentSerializerCollectionSystemGroup (that is responsible to create the the default ghost variant mapping singleton). The DefaultVariantSystemBase already has the the correct CreateAfterAttribute set, and it is not necessary for the sub-class to add the explicitly add/set this creation order again.
+
+DefaultVariantSystemGroup
+Group that contains all the systems responsible for registering/setting up the default Ghost Variants (see GhostComponentVariationAttribute). The system group OnCreate method finalizes the default mapping inside its own OnCreate method, by collecting from all the registered DefaultVariantSystemBase systems the set of variant to use. The order in which variants are set in the map is governed by the creation order (see CreateAfterAttribute, CreateBeforeAttribute). The group is present in both baking and client/server worlds.
+
+DisableAutomaticPrespawnSectionReportingAuthoring
+Authoring component which adds the DisableAutomaticPrespawnSectionReporting component to the Entity.
+
+DontSerializeForCommandAttribute
+Add the attribute to prevent a field ICommandData struct to be serialized.
+
+DontSerializeVariant
+Special universal component variant that can be assigned to any component and/or buffer. When a component serializer is set to DontSerializeVariant, the component itself is not stripped from the client or server version of the prefab, but at runtime it is not serialized (and thus not sent to the clients).
+
+DontSupportPrefabOverridesAttribute
+Use this attribute to prevent a GhostComponent from supporting any kind of variants or PrefabType overrides. Hides this component in the GhostAuthoringInspectionComponent window. Mutually exclusive to SupportsPrefabOverridesAttribute.
+
+DriverMigrationSystem
+A system that should be used to temporarly keep the internal transport connections alive while transferring then to another world. For example, you can rely on the DriverMigrationSystem to re-use the same connections in between a lobby world and the game world.
+
+FixedStepGhostPredictionSystemGroup
+Temporary type for upgradability, to be removed before 1.0
+
+GhostAuthoringComponent
+The GhostAuthoringComponent is the main entry point to configure and create replicated ghosts types. The component must be added only to the GameObject hierarchy root.
+
+It allows setting all ghost properties, such as the replication mode SupportedGhostModes, bandwidth optimization strategy (OptimizationMode, the ghost Importance (how frequently is sent) and others).
+
+GhostAuthoringInspectionComponent
+GhostAuthoringInspectionComponent
+MonoBehaviour you may optionally add to any/all GameObjects in a Ghost Prefab, which allows inspecting of (and saving of) "Ghost Meta Data". E.g.
+
+- Override/Tweak some of the component replication properties, for both child and root entities.
+
+- Assign to each component which GhostComponentVariationAttribute to use.
+
+GhostAuthoringComponent
+GhostComponentAttribute
+This attribute can be used to tag components to control which ghost prefab variants they are included in and where they are sent for owner predicted ghosts.
+
+GhostComponentSerializerCollectionSystemGroup
+Parent group of all code-generated systems that registers the ghost component serializers to the GhostCollection, more specifically to the GhostComponentSerializer.State collection) at runtime. For internal use only, don't add systems to this group.
+
+GhostComponentUtilities
+Utility methods for working with GhostComponents.
+
+GhostComponentVariationAttribute
+Generate a serialization variant for a component using the GhostFieldAttribute annotations present in variant declaration. The component variant can be assigned at authoring time using the GhostAuthoringComponent editor.
+
+Note: This is incompatible with any type implementing DontSupportPrefabOverridesAttribute.
+
+When declaring a variant, all fields that should be serialized must be declared. Any missing field or new field not present in the original struct will not be serialized.
+GhostEnabledBitAttribute
+Attribute denoting that an IEnableableComponent should have its enabled flag replicated. And thus, this is only valid on enableable component types. You'll get compiler errors if it's not.
+
+GhostFieldAttribute
+Attribute used to specify how and which fields and properties of IComponentData or IBufferElementData should be replicated. When a component or buffer contains at least one field that is annotated with a GhostFieldAttribute, a struct implementing the component serialization is automatically code-generated.
+
+GhostFieldSubType
+Hold a list of constant int that can be used across the project to specify subtype in GhostFieldAttribute. User can expand that list by using an AssemblyDefinitionReference to Unity.NetCode.Gen and adding a partial class that extend and add new constant literals to that class.
+
+GhostInputSystemGroup
+The parent group for all input gather systems. Only present in client worlds, it runs before the CommandSendSystemGroup in order to remove any latency in betwen the input gathering and the command submission. All the your systems that translate user input (ex: using the Input into ICommandData command data must should update in this group.
+
+GhostPredictionSystemGroup
+Temporary type for upgradability, to be removed before 1.0
+
+GhostPrefabCreation
+Helper methods and structs used to configure and create ghost prefabs
+
+GhostSerializerAttribute
+For internal use only. Markup for the generate component/buffer code-generated serializer, added automatically by the code-generation system.
+
+GhostSimulationSystemGroup
+Present for both client and server worlds. This is the core group, and contains the majority of the netcode systems. Its responsibilities are varied, and can be roughly sub-divided in the following categories:
+
+-input gathering: GhostInputSystemGroup
+
+-command handling: CommandSendSystemGroup
+
+-ghost prediction/simulation: PredictedSimulationSystemGroup
+
+-ghost spawning: see GhostSpawnClassificationSystem, GhostSpawnSystemGroup, GhostSpawnSystem, GhostDespawnSystem
+
+-ghost replication: GhostCollection, GhostSendSystem, GhostReceiveSystem and GhostUpdateSystem.
+
+In general, all systems that need to simulate/manipulate ghost entities should be added to this group.
+
+GhostSpawnSystemGroup
+Parent group of all systems that need to process ghost entities after they are spawned. The group execute before NetworkReceiveSystemGroup to guarantee that when a new snasphot is received from server, all new ghosts has been spawned and ready to receive new data.
+
+NetCodeDebugConfigAuthoring
+Add this component to a gameobject present in a sub-scene to configure the NetDebug logging level and enable packet dumps.
+
+NetCodeDisableCommandCodeGenAttribute
+This attribute is used to disable code generation for a struct implementing ICommandData or IRpcCommand
+
+NetCodePhysicsConfig
+Component used to enable predicted physics automatic world changing(PredictedPhysicsNonGhostWorld) and lag compensation (EnableLagCompensation) and tweak their settings. At conversion time, a singleton entity is added to the scene/subscene if either one of, or both of the features are enabled, and the PredictedPhysicsNonGhostWorld, EnableLagCompensation components are automatically added to it based on these settings.
+
+NetworkIdDebugColorUtility
+A collection of utility to assign constant colors for the NetworkId's. There are in total 13 unique colors, with 14+ mapping to the original.
+
+NetworkReceiveSystemGroup
+Parent group of all systems that; receive data from the server, deal with connections, and that need to perform operations before the ghost simulation group. In particular, CommandSendSystemGroup, , and the NetworkStreamReceiveSystem update in this group.
+
+PhysicsDefaultVariantSystem
+Optionally register the default variant to use for the and the . It will never override the default assignment for the PhysicsVelocity nor the PhysicsGraphicalSmoothing components if they are already present in the Unity.NetCode.GhostComponentSerializerCollectionData.DefaultVariants map.
+
+Any system deriving from DefaultVariantSystemBase will take precendence, even if they are created after this system.
+
+PredictedFixedStepSimulationSystemGroup
+A fixed update group inside the ghost prediction. This is equivalent to FixedStepSimulationSystemGroup but for prediction. The fixed update group can have a higher update frequency than the rest of the prediction, and it does not do partial ticks.
+
+PredictedPhysicsConfigSystem
+A system which setup physics for prediction. It will move the PhysicsSystemGroup to the PredictedFixedStepSimulationSystemGroup.
+
+PredictedSimulationSystemGroup
+The parent group for all "deterministic" gameplay systems that modify predicted ghosts. This system group runs for both the client and server worlds at a fixed time step, as specified by the SimulationTickRate setting.
+
+On the server, this group is only updated once per tick, because it runs in tandem with the SimulationSystemGroup (i.e. at a fixed time step, at the same rate). On the client, the group implements the client-side prediction logic by running the client simulation ahead of the server.
+
+Importantly: Because the client is predicting ahead of the server, all systems in this group will be updated multiple times per simulation frame, every single time the client receives a new snapshot (see NetworkTickRate and SimulationTickRate). This is called "rollback and re-simulation".
+
+These re-simulation prediction group ticks also get more frequent at higher pings. I.e. Simplified: A 200ms client will likely re-simulate roughly x2 more frames than a 100ms connection, with caveats. And note: The number of predicted, re-simulated frames can easily reach double digits. Thus, systems in this group must be exceptionally fast, and are likely your CPU "hot path". To help mitigate this, take a look at prediction group batching here MaxPredictionStepBatchSizeRepeatedTick.
+
+Pragmatically: This group contains most of the game simulation (or, at least, all simulation that should be "predicted" (i.e. simulation that is the same on both client and server)). On the server, all prediction logic is treated as authoritative game state (although thankfully it only needs to be simulated once, as it's authoritative).
+
+PrespawnGhostSystemGroup
+The PrespawnGhostSystemGroup contains all the systems related to pre-spawned ghost.
+
+RpcCommandRequestSystemGroup
+A group used to make sure all processing on command request entities happens in the correct place. This is used by code-gen and should only be used directly when implementing custom command request processors.
+
+ServerOnlyVariant
+Special universal component variant that can be assigned to any component and/or buffer when configuring the GhostComponentSerializerCollectionSystemGroup. Mostly used for stripping components from the client-side ghost prefabs.
+
+To use this for your own types: Set it as the default in your own RegisterDefaultVariants(Dictionary<ComponentType, DefaultVariantSystemBase.Rule>) method.
+
+SupportsPrefabOverridesAttribute
+Use this attribute to allow a GhostComponent to support any kind of Ghost variation. Mutually exclusive to DontSupportPrefabOverridesAttribute.
+
+SwitchPredictionSmoothingPhysicsOrderingSystem
+System to make sure prediction switching smoothing happens after physics motion smoothing and overwrites the results
+
+TransformDefaultVariantSystem
+System that optinally setup the Netcode default variants used for transform components in case a default is not already present. The following variants are set by default by the package:
+
+LocalTransform
+It will never override the default assignment for the transform components if they are already present in the Unity.NetCode.GhostComponentSerializerCollectionData.DefaultVariants map.
+Any system deriving from DefaultVariantSystemBase will take precendence, even if they are created after this system.
+
+Structs
+ApplyCurrentInputBufferElementToInputData<TInputBufferData, TInputComponentData>
+For internal use only, helper struct that should be used to implements systems that copies commands from the ICommandData buffer to the IInputComponentData component present on the entity.
+
+ApplyCurrentInputBufferElementToInputData<TInputBufferData, TInputComponentData>.ApplyInputDataFromBufferJob
+Helper struct that should be used to implement jobs that copies commands from an ICommandData buffer to the respective IInputComponentData.
+
+AutoCommandTarget
+Component that automates command "reading and sending" (for clients) or "writing, using, and broadcasting" (for the server).
+
+When the AutoCommandTarget component is Enabled, the entity is considered as an input source for ICommandData's for the client and all non empty command buffers present on the entity are serialized into the OutgoingCommandDataStreamBuffer, along with the id of the ghost they are sent to.
+
+///
+On the server side, when a command is deserialized from the IncomingCommandDataStreamBuffer, the corresponding entity is looked up, and if the AutoCommandTarget component is enabled, the commands are added to the corresponding input command buffer.
+
+ClientPopulatePrespawnedGhostsSystem
+Responsible for assigning a unique ghostId to each pre-spawned ghost, and and adding the ghosts to the spawned ghosts maps. Relies on the previous initializations step to determine the subscene subset to process.
+
+ClientServerTickRate
+Create a ClientServerTickRate singleton to configure the client and server simulation simulation time step, and the server packet send rate. The singleton can be created at runtime or by adding the component to a singleton entity in sub-scene. It is not mandatory to create the singleton in the client worlds (while it is considered best practice), since the relevant settings for the client (the SimulationTickRate and NetworkTickRate) are synced as part of the initial handshake (Unity.NetCode.ClientServerTickRateRefreshRequest). The ClientServerTickRate should also be used to customise other server only timing settings, such as the maximum number of tick per frame, tick batching (MaxSimulationStepBatchSize and others. See the individual fields documentation for more information.
+
+ClientTickRate
+Create a ClientTickRate singleton in the client world (either at runtime or by loading it from sub-scene) to configure all the network time synchronization, interpolation delay, prediction batching and other setting for the client. See the individual fields for more information about the individual properties.
+
+ClientTrackLoadedPrespawnSections
+The ClientTrackLoadedPrespawnSections is responsible for tracking when a scene section is unloaded and removing the pre-spawned ghosts from the client ghosts maps
+
+CommandDataInterpolationDelay
+Optional component used to access the interpolation delay in order to implement lag compensation on the server. Also exists on predicted clients (but the interpolation delay will always be 0).
+
+The component is not baked during conversion by default, and should be added explicitly by the user at one of two points:
+
+1. At conversion time: By using the checkbox in GhostAuthoringComponent or your own Baker.
+
+2. At runtime: After the entity is spawned.
+
+CommandReceiveSystem<TCommandDataSerializer, TCommandData>
+Helper struct for implementing systems to receive commands. This is generally used by code-gen and should only be used directly in special cases.
+
+CommandReceiveSystem<TCommandDataSerializer, TCommandData>.ReceiveJobData
+Helper struct used by code-gen for implementing the Execute method of the the generated receiving job. The ReceiveJobData implement the command deserialization logic, by reading from the data stream the serialized commands and enqueuing them into the taget entity command buffer. As part of the command deserialization, if a CommandDataInterpolationDelay component is present on target entity, it will be updated with the latest reported interpolation delay.
+
+CommandSendSystem<TCommandDataSerializer, TCommandData>
+Helper struct for implementing systems to send commands. This is generally used by code-gen and should only be used directly in special cases.
+
+CommandSendSystem<TCommandDataSerializer, TCommandData>.SendJobData
+Helper struct used by code-generated command job to serialize the ICommandData into the OutgoingCommandDataStreamBuffer for the client connection.
+
+CommandTarget
+Component added to all NetworkStreamConnection, stores a reference to the entity where commands should be read from (client) or written to (server). It is mandatory to set a valid reference to the targetEntity in order to receive client commands if:
+
+- you are not using the AutoCommandTarget.
+
+- you want to supoort thin-clients (because AutoCommandTarget does not work in that case) The use of AutoCommandTarget and CommandTarget is complementary and they can used at the sam time.
+
+CommandTargetComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+ComponentTypeSerializationStrategy
+For internal use only. Stores individual "serialization strategies" (and meta-data) for all netcode-informed components, as well as all variants of these components (GhostComponentVariationAttribute). Thus, maps to the code-generated GhostComponentSerializer ("Default Serializers") as well as all user-created Variants (GhostComponentVariationAttribute). This type also stores instances of the DontSerializeVariant, ClientOnlyVariant, and ServerOnlyVariant.
+
+Note: Serializers are considered "optional". It is perfectly valid for a types "serialization strategy" to be: "Do nothing". An example of this is a component for which a variant has been declared (using the GhostComponentVariationAttribute) but for which serialization is not generated, i.e: the GhostInstance attribute is specified in the base component declaration, but not in a variant. We call these "Empty Variants".
+
+ConnectionState
+An optional cleanup component that can be added to a newly created connection to monitor its state changes. Must be added and removed by the gameplay logic. When the ConnectionState is present, the NetCode package will update the component when the connection state changes. By adding the ConnectionState state component, the connection NetworkId and DisconnectReason are retained until the game don't remove the state component.
+
+ConvertPredictionEntry
+Struct storing settings for an individual queue entry in the GhostPredictionSwitchingQueues.
+
+CopyInputToCommandBuffer<TInputBufferData, TInputComponentData>
+For internal use only, helper struct that should be used to implement systems that copy the content of an IInputComponentData into the code-generated ICommandData buffer.
+
+CopyInputToCommandBuffer<TInputBufferData, TInputComponentData>.CopyInputToBufferJob
+For internal use only, simplify the creation of system jobs that copies IInputComponentData data to the underlying ICommandData buffer.
+
+DefaultSmoothingActionUserParams
+Add the DefaultSmoothingActionUserParams component to customise on a per-entity basis the prediction error range in which the position smoothing is active.
+
+DefaultTranslationSmoothingAction
+The default prediction error Unity.NetCode.DefaultTranslationSmoothingAction.SmoothingAction(System.IntPtr,System.IntPtr,System.IntPtr) function for the component. Supports the user data that lets you customize the clamping and snapping of the translation component (any time the translation prediction error is too large).
+
+DefaultVariantSystemBase.Rule
+When defining default variants for a type, you must denote whether or not this variant will be applied to both parents and children.
+
+DisableAutomaticPrespawnSectionReporting
+Singleton component used to enable/disable the built-in scene auto-tracking.
+
+DisconnectReasonEnumToString
+Convert disconnection reason error code into human readable error messages.
+
+EnablePacketLogging
+Add this component to connection entities NetworkStreamConnection to get more detailed Netcode debug information (Debug level) in general or to enable ghost snapshot or packet logging per connection. Debug information can be toggled globally in the Playmode Tools Window and in the NetCodeDebugConfigAuthoring component.
+
+GameProtocolVersion
+The game specific version to use for protcol validation when the client and server connects. If a singleton with this component does not exist 0 will be used instead. Protocol validation will still validate the NetCodeVersion, RpcCollectionVersion and ComponentCollectionVersion.
+
+GhostChildEntity
+A tag added to child entities in a ghost with multiple entities. It should also be added to ghosts in a group if the ghost is not the root of the group.
+
+GhostChildEntityComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+GhostCollection
+A component used to identify the singleton which owns the ghost collection lists and data. The singleton contains buffers for GhostCollectionPrefab, GhostCollectionPrefabSerializer, GhostCollectionComponentIndex and GhostComponentSerializer.State
+
+GhostCollectionPrefab
+A list of all prefabs which can be used for ghosts. This is populated with all ghost prefabs on the server and that list is sent for clients. Having a prefab in this list does not guarantee that there is a serializer for it yet. Added to the GhostCollection singleton entity.
+
+GhostCollectionSystem
+System responsible to construct and manage the GhostCollection singleton data.
+
+The system processes all the ghost prefabs present in the world by:
+
+- stripping and removing components from the entity prefab based on GhostPrefabType
+
+- populating the GhostCollectionPrefab
+
+- preparing and constructing all the necessary data structure (Unity.NetCode.GhostCollectionPrefabSerializer, Unity.NetCode.GhostCollectionComponentIndex and Unity.NetCode.GhostCollectionComponentType) for serializing ghosts
+
+GhostComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+GhostComponentSerializerCollectionData
+GhostComponentSerializerCollectionSystemGroup. Blittable. For internal use only.
+
+GhostConnectionPosition
+Add this component to each connection to determine which tiles the connection should prioritize. This will be passed as argument to the built-in scale function to compute Importance. See GhostDistanceImportance implementation.
+
+GhostCount
+Singleton component with APIs and collections required for Ghost counting.
+
+GhostDeltaPredictor
+For internal use only. Used by the ghost component serializer to calculate (predict) the new value for a field, given the two previous baseline values.
+
+This value provides a good estimate for current value of a variable when changes are linear or otherwise predictable. I.e. Small deltas have good compression ratios.
+
+GhostDeserializerState
+Inter-op struct used to pass arguments to the ghost component serializers (see GhostComponentSerializer).
+
+GhostDespawnSystem
+Present only in client worlds. Responsible for destroying spawned ghosts when a despawn request/command is received from the server.
+
+Clients are not responsible for destroying ghost entities (and thus should never). The server is responsible for notifying the client about which ghosts should be destroyed (as part of the snapshot protocol).
+
+When a despawn command is received, the ghost entity is queued into a despawn queue. Two distinct despawn queues exist: one for interpolated, and one for the predicted ghosts.
+
+The above distinction is necessary because interpolated ghosts timeline (InterpolationTick) is in the past in respect to both the server and client timeline (the current simulated tick). When a snapshot with a despawn command (for an interpolated ghost) is received, the server tick at which the entity has been destroyed (on the server) may be still in the future (for this client), and therefore the client must wait until the InterpolationTick is greater or equal the despawning tick to actually despawn the ghost.
+
+Predicted entities, on the other hand, can be despawned only when the current ServerTick is greater than or equal to the despawn tick of the server. Therefore, if the client is running ahead (as it should be), predicted ghosts will be destroyed as soon as their despawn request is pulled out of the snapshot (i.e. later on that same frame).
+
+GhostDistanceData
+The default configuration data for GhostImportance. Uses tiling to group entities into spatial chunks, allowing chunks to be prioritized based on distance (via the GhostDistancePartitioningSystem), effectively giving you performant distance-based importance scaling.
+
+GhostDistanceImportance
+Computes distance based importance scaling. I.e. Entities far away from a clients importance focal point (via GhostConnectionPosition) will be sent less often.
+
+GhostDistancePartitioningSystem
+Computes index for each entity. The translation is used to compute the right tile index to assign to the GhostDistancePartitionShared. A tiles border width is used to allow for a buffer in which it will not swap over. Meaning that when an entity has crossed the border width over the end of the tile, the entity will be assign the neighboring tile index. To cross back the same border width distance must be traveled back to be reassigned to the original tile index.
+
+GhostDistancePartitionShared
+Index information per entity used for distance based Importance scaling.
+
+GhostGroup
+Similar to LinkedEntityGroup, this buffer can be added to the parent ghost, and denotes a group of ghost children that should all be serialized as part of this ghost. Note: LinkedEntityGroup stores the root entity in the list, GhostGroup does not!
+
+GhostImportance
+Singleton component used to control importance settings
+
+GhostInstance
+Component signaling an entity which is replicated over the network
+
+GhostOwner
+The GhostOwnerComponent is an optional component that can be added to a ghost to create a bond/relationship in between an entity and a specific client (for example, the client who spawned that entity, a bullet, the player entity). It is usually added to predicted ghost (see PredictedGhost) but can also be present on the interpolated ones.
+
+It is mandatory to add a GhostOwner in the following cases:
+
+- When a ghost is configured to be owner-predicted GhostMode, because it is necessary to distinguish in between who is predicting (the owner) and who is interpolating the ghost.
+
+- If you want to enable remote player prediction (see ICommandData) or, in general, to allow sending data based on ownership the SendToOwner.
+
+- If you want to use the AutoCommandTarget feature.
+
+GhostOwnerComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+GhostOwnerIsLocal
+An enableable tag component used to track if a ghost with an owner is owned by the local host or not. This is enabled for all ghosts on the server and for ghosts where the ghost owner network id matches the connection id on the client.
+
+GhostPredictionHistorySystem
+A system used to make a backup of the current predicted state, right after the last full (not fractional) tick in a prediction loop for a frame has been completed. The backup does a memcopy of all ghost components (into a separate memory area connected to the chunk). The backup is used to restore the last full tick, to continue prediction when no new data has arrived. Note: When this happens, only the fields which are actually serialized as part of the snapshot are copied back, not the full component. Thus, preserving any non-GhostField state. The backup data is also used to:
+
+Detect errors in the prediction.
+To add smoothing of predicted values.
+GhostPredictionSmoothing
+Singleton used to register a SmoothingAction for a certain component type. The SmoothingAction is used to change the component value over time correct misprediction. Two different types of smoothing action can be registered:
+
+- A smoothing action without argument. See RegisterSmoothingAction<T>(EntityManager, PortableFunctionPointer<GhostPredictionSmoothing.SmoothingActionDelegate>)
+
+- A smoothing action that take a component data as argument. See RegisterSmoothingAction<T, U>(EntityManager, PortableFunctionPointer<GhostPredictionSmoothing.SmoothingActionDelegate>)
+
+GhostPredictionSmoothingSystem
+System that corrects the client prediction errors, by applying the smoothing actions registerd to the GhostPredictionSmoothing singleton to to all predicted ghost that miss-predict.
+
+GhostPredictionSwitchingQueues
+Singleton component with APIs and collections required for converting client ghosts GhostMode to Predicted & Interpolated. GhostPredictionSwitchingSystem
+
+GhostPredictionSwitchingSystem
+System that applies the prediction switching on the queued entities (via GhostPredictionSwitchingQueues).
+
+GhostPrefabCreation.Component
+Identifier for a specific component type on a specific child of a ghost prefab.
+
+GhostPrefabCreation.ComponentOverride
+A modifier for a specific component on a specific child entity. Only the override types specified by the OverrideType are applied, the others are ignored.
+
+GhostPrefabCreation.Config
+Configuration used to create a ghost prefab.
+
+GhostReceiveSystem
+System present only in clients worlds, receive and decode the ghost snapshosts sent by the server.
+
+When a new snapshost is received, the system will start decoding the packet protocol by extracting:
+
+-the list of ghost that need to despawned
+
+-for each serialized ghost, it delta-compressed or uncompressed state
+
+The system will schedule spawning and despawning ghosts requests, by using the GhostSpawnBuffer, and Unity.NetCode.GhostDespawnQueues respectively.
+When a new state snapshot is received for a ghost that has been already spawned (see SpawnedGhostEntityMap), the state is deserialized and added to the entity SnapshotDataBuffer history buffer.
+
+The received snapshot are recorded into the NetworkSnapshotAck, that will then used to send back to the server, as part of the command stream, the latest received snapshot by the client.
+
+GhostRelevancy
+Singleton entity present on the server. Every frame, collect the set of ghosts that should be (or should not be) replicated to a given client.
+
+GhostSendSystem
+System present only for servers worlds, and responsible to replicate ghost entities to the clients. The GhostSendSystem is one of the most complex system of the whole package and heavily rely on multi-thread jobs to dispatch ghosts to all connection as much as possible in parallel.
+
+Ghosts entities are replicated by sending a 'snapshot' of their state to the clients, at NetworkTickRate frequency. Snaphosts are streamed to the client when their connection is tagged with a NetworkStreamInGame component (we usually refere a connection with that tag as "in-game"), and transmitted using an unrealiable channel. To save bandwith, snapshosts are delta-compressed against the latest reported ones received by the client. By default, up to 3 baseline are used to delta-compress the data, by using a predictive compression scheme (see GhostDeltaPredictor). It is possible to reduce the number of baseline used (and CPU cycles) using the GhostSendSystemData settings.
+
+The GhostSendSystem is designed to send to each connection one single packet per network update. By default, the system will try to replicate to the clients all the existing ghost present in the world. When all ghosts cannot be serialized into the same packet, the enties are prioritized by their importance.
+The base ghost importance can be set at authoring time on the prefab (GhostAuthoringComponent); At runtime the ghost importance is scaled based on:
+
+- age (the last time the entities has been sent)
+
+- scaled by distance, (see GhostConnectionPosition, GhostDistanceImportance
+
+- scaled by custom scaling (see GhostImportance
+
+Ghost entities are replicated on "per-chunk" basis; all ghosts for the same chunk, are replicated together. The importance, as well as the importance scaling, apply to whole chunk.
+The send system can also be configured to send multiple ghost packets per frame and to to use snaphost larger than a single MTU. In that case, the snapshot packet is sent using another unreliable channel, setup with a FragmentationPipelineStage.
+
+GhostSendSystemData
+Singleton entity that contains all the tweakable settings for the GhostSendSystem.
+
+GhostSerializerState
+For internal use only, struct used to pass some data to the code-generate ghost serializer.
+
+GhostSpawnBuffer
+The GhostSpawnBuffer is the data for a GhostSpawnQueue singleton. It contains a list of ghosts which will be spawned by the GhostSpawnSystem at the beginning of next frame. It is populated by the GhostReceiveSystem and there needs to be a classification system updating after the GhostReceiveSystem which sets the SpawnType so the spawn system knows how to spawn the ghost. A classification system should only modify the SpawnType and PredictedSpawnEntity fields of this struct. InternalBufferCapacity allocated to almost max out chunk memory.
+
+GhostSpawnClassificationSystem
+The default GhostSpawnClassificationSystem will set the SpawnType to the default specified in the GhostAuthoringComponent, unless some other classification has already set the SpawnType. This system will also check ghost owner to set the spawn type correctly for owner predicted ghosts. For predictive spawning you usually add a system after GhostSpawnClassificationSystem which only looks at items with SpawnType set to Predicted and set the PredictedSpawnEntity if you find a matching entity. The reason to put predictive spawn systems after the default is so the owner predicted logic has run.
+
+GhostSpawnQueue
+GhostSPawnQueue is used to identify the singleton component which contains the GhostSpawnBuffer.
+
+GhostSpawnQueueComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+GhostSpawnSystem
+System responsible for spawning all the ghost entities for the client world.
+
+When a ghost snapshot is received from the server, the GhostReceiveSystem add a spawning request to the GhostSpawnBuffer. After the spawning requests has been classified (see GhostSpawnClassificationSystem), the GhostSpawnSystem start processing the spawning queue.
+
+Based on the spawning (GhostSpawnBuffer.Type), the requests are handled quite differently.
+
+When the mode is set to Interpolated, the ghost creation is delayed until the InterpolationTick match (or is greater) the actual spawning tick on the server. A temporary entity, holding the spawning information, the received snapshot data from the server, and tagged with the PendingSpawnPlaceholder is created. The entity will exists until the real ghost instance is spawned (or a de-spawn request has been received), and its sole purpose of receiving new incoming snapshots (even though they are not applied to the entity, since it is not a real ghost).
+
+When the mode is set to Predicted, a new ghost instance in spawned immediately if the current simulated ServerTick is greater or equals the spawning tick reported by the server. This condition is usually the norm, since the client timeline (the current simulated tick) should be ahead of the server.
+
+Otherwise, the ghost creation is delayed until the the ServerTick is greater or equals the required spawning tick. Like to interpolated ghost, a temporary placeholder entity is created to hold spawning information and for holding new received snapshots.
+
+GhostType
+Component storing the guid of the prefab the ghost was created from. This is used to lookup ghost type in a robust way which works even if two ghosts have the same archetype
+
+GhostTypeComponent
+Temporary type for upgradability, to be removed before 1.0
+
+GhostTypePartition
+Component used on the server to make sure the ghosts of different ghost types are in different chunks, even if they have the same archetype (regardless of component data).
+
+GhostUpdateSystem
+System present only in client worlds, and responsible for:
+
+- updating the state of interpolated ghosts, by copying and intepolating data from the received snapshosts.
+
+- restore the predicted ghost state from the Unity.NetCode.GhostPredictionHistoryState before running the next prediction loop (until new snapshot aren't received).
+
+- updating the PredictedGhost properties for all predicted ghost, by reflecting the latest received snapshot (see AppliedTick) and setting up the correct tick from which the ghost should start predicting (see PredictionStartTick
+
+IncomingCommandDataStreamBuffer
+This buffer stores a single incoming command packet. One per NetworkStream (client). A command packet contains commands for CommandSendSystem.k_InputBufferSendSize (default 4) ticks where 3 of them are delta compressed. It also contains some timestamps etc for ping calculations.
+
+IncomingCommandDataStreamBufferComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+IncomingRpcDataStreamBuffer
+One per NetworkConnection. Stores queued, incoming RPC data. Thus, buffer size is related to inbound-from-server RPC count * size. InternalBufferCapacity is zero as RPCs can vary in size, and we don't want to constantly move the RPC data into and out of the chunk.
+
+IncomingRpcDataStreamBufferComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+IncomingSnapshotDataStreamBuffer
+One per NetworkConnection. Stores the incoming, yet-to-be-processed snapshot stream data for a connection. Each snapshot is designed to fit inside MTU, so expect this to be MTU or less.
+
+IncomingSnapshotDataStreamBufferComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+InputEvent
+This type can be used inside IInputComponentData to store input events.
+
+IPCAndSocketDriverConstructor
+The default NetCode driver constructor. It creates:
+
+On the server: both IPCNetworkInterface and UDPNetworkInterface NetworkDriver in the editor and only a single UDPNetworkInterface driver in the build.
+On the client:
+a single IPCNetworkInterface NetworkDriver if the both client and server worlds are present in the same process.
+a single UDPNetworkInterface driver in all other cases.
+In the Editor and Development build, if the network simulator is enabled, force on the client to use the UDPNetworkInterface network driver. To let the client use the IPC network interface In ClientServer mode it is mandatory to always create the server world first.
+LagCompensationConfig
+Singleton entity that allow to configure the NetCode LagCompensation system. If the singleton does not exist the PhysicsWorldHistory system will not run. If you want to use PhysicsWorldHistory in a prediction system the config must exist in both client and server worlds, but in the client world HistorySize can be different from the server - usually 1 is enough on the client.
+
+MigrationTicket
+Am singleton entity returned by the StoreWorld(World) that can be used to load a previously stored driver state into another world.
+
+NetCodeDebugConfig
+Add this component to a singleton entity to configure the NetCode package logging level and to enable/disable packet dumps.
+
+NetDebug
+Singleton handling NetCode logging and log management.
+
+NetDebugSystem
+Systems responsible to initialize and create the NetDebug singleton and to flush all logs.
+
+NetworkDriverStore
+Store and manage an array of NetworkDriver. The capacity is fixed to Capacity. The driver registration should start by calling BeginDriverRegistration() and terminate with EndDriverRegistration(). The store also provide some accessor and utlilty methods.
+
+NetworkDriverStore.NetworkDriverInstance
+Struct that contains a NetworkDriver and relative pipelines.
+
+NetworkId
+The connection identifier assigned by the server to the incoming client connection. The NetworkIdComponent is used as temporary client identifier for the current session. When a client disconnects, its network id can be reused by the server, and assigned to a new, incoming connection (on a a "first come, first serve" basis). Thus, there is no guarantee that a disconnecting client will receive the same network id once reconnected. As such, the network identifier should never be used to persist - and then retrieve - information for a given client/player.
+
+NetworkIdComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+NetworkProtocolVersion
+The NetworkProtocolVersion is a singleton entity that is automatically created by the NetworkStreamReceiveSystem and that is used to verify client and server compatibility.
+
+The protocol version is composed by different part:
+
+- The NetCode package version.
+
+- A user defined GameProtocolVersion game version, that identify the version of your game
+
+- A unique hash of all the IRpcCommand and ICommandData that is used to verify both client and server recognize the same rpc and command and that can serialize/deserialize them in the same way
+
+- A unique hash of all the replicated IComponentData and IBufferElementData that is used to verify both client and server can serialize/deserialize all the replicated component present in the ghosts
+
+When a client tries to connect to the server, as part of the initial handshake, they exchange their protocol version to validate they are both using same version. If the version mismatch, the connection is forcibly closed.
+NetworkSnapshotAck
+Client and Server Component. One per NetworkId entity, stores SnapshotAck and Ping info for a client.
+
+NetworkSnapshotAckComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+NetworkStreamConnection
+A connection is represented by an entity having a NetworkStreamConnection. The component hold a reference to the underlying transport NetworkConnection and the NetworkDriver that created it. All connections share a common set of components:
+
+- NetworkId
+
+- IncomingRpcDataStreamBuffer
+
+- OutgoingCommandDataStreamBuffer
+
+- OutgoingRpcDataStreamBuffer
+
+- PrespawnSectionAck
+
+- CommandTarget
+
+Client connections also have a IncomingSnapshotDataStreamBuffer to handle server ghost snapshots.
+NetworkStreamConnectSystem
+A system processing NetworkStreamRequestConnect components
+
+NetworkStreamDriver
+Singleton that can hold a reference to the NetworkDriverStore and that should be used to easily listening for new connection or connecting to server. Provide also other shortcut for retrieving the remote address of a NetworkStreamConnection or its underlying transport state.
+
+NetworkStreamInGame
+A component used to signal that a connection should send and receive snapshots and commands. Before adding this component the connection only processes RPCs. Must be Added by game logic to start sending snapshots and commands.
+
+NetworkStreamListenSystem
+A system processing NetworkStreamRequestListen components
+
+NetworkStreamReceiveSystem
+The NetworkStreamReceiveSystem is one of the most important system of the NetCode package and its fundamental job is to manage all the NetworkStreamConnection life-cycles (creation, update, destruction), and receiving all the NetworkStreamProtocol message types. It is responsible also responsible for:
+
+- creating the NetworkStreamDriver singleton (see also NetworkDriverStore and NetworkDriver).
+
+- handling the driver migration (see DriverMigrationSystem and MigrationTicket).
+
+- listening and accepting incoming connections (server).
+
+- exchanging the NetworkProtocolVersion during the initial handshake.
+
+- updating the ConnectionState state component if present.
+
+NetworkStreamRequestConnect
+A component that can be added to a new entity to create a new connection instead of calling Connect(EntityManager, NetworkEndpoint, Entity)
+
+NetworkStreamRequestDisconnect
+A component used to signal that the game logic wants to close the connection
+
+NetworkStreamRequestListen
+A component that can be added to a new entity to start listening to a new connection instead of calling Listen(NetworkEndpoint)
+
+NetworkStreamSnapshotTargetSize
+A per-connection component, which is used by the GhostSendSystem (on the server) to force a non-default packet size for snapshots. Must be added to the NetworkConnection entity for a connection, by your game logic.
+
+NetworkTick
+A simple struct used to represent a network tick. This is using a uint internally, but it has special logic to deal with invalid ticks, and it handles wrap around correctly.
+
+NetworkTime
+Present on both client and server world, singleton component that contains all the timing characterist of the client/server simulation loop.
+
+NetworkTimeSystem
+System responsible for estimating the ServerTick and InterpolationTick using the current round trip time (see NetworkSnapshotAck) and feedback from the server (see ServerCommandAge).
+
+The system tries to keep the server tick (present on the client) ahead of the server, such that input commands (see ICommandData and IInputComponentData) are received before the server needs them for the simulation. The system speeds up and slows down the client simulation elapsed delta time to compensate for changes in the network condition, and makes the reported ServerCommandAge close to the TargetCommandSlack.
+
+This time synchronization start taking place as soon as the first snapshot is received by the client. Because of that, until the client NetworkStreamConnection is not set in-game (see NetworkStreamInGame), the calculated server tick and interpolated are always 0.
+
+In the case where the client and server world are on the same process, and an IPC connection is used (see IPC), some special optimizations can be applied. E.g. In this case the client should always run 1 tick per frame (server and client update in tandem).
+
+OutgoingCommandDataStreamBuffer
+This buffer stores a single outgoing command packet without the headers for timestamps and ping. A command packet contains commands for CommandSendSystem.k_InputBufferSendSize (default 4) ticks where 3 of them are delta compressed. It also contains some timestamps etc for ping calculations.
+
+OutgoingCommandDataStreamBufferComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+OutgoingRpcDataStreamBuffer
+One per NetworkConnection. Stores queued, outgoing RPC data. Thus, buffer size is related to client-authored RPC count * size. InternalBufferCapacity is zero as RPCs can vary in size, and we don't want to constantly move the RPC data into and out of the chunk.
+
+OutgoingRpcDataStreamBufferComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+PendingSpawnPlaceholder
+Component on the client signaling that an entity is a placeholder for a "not yet spawned" ghost. I.e. Not yet a "real" ghost.
+
+PendingSpawnPlaceholderComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+PhysicsGraphicalSmoothingDefaultVariant
+Default serialization variant for the PhysicsGraphicalSmoothing which disables smoothing on interpolated clients. Ghost are controled by the server rather than physics on interpolated clients, which makes the physics smoothing incorrect.
+
+PhysicsVelocityDefaultVariant
+Default serialization variant for the PhysicsVelocity. Necessary to synchronize physics
+
+PhysicsWorldHistory
+A system used to store old state of the physics world for lag compensation. This system creates a PhysicsWorldHistorySingleton and from that you can get a physics collision world for a previous tick.
+
+PhysicsWorldHistorySingleton
+A singleton component from which you can get a physics collision world for a previous tick.
+
+PortableFunctionPointer<T>
+Simple RAII-like wrapper that simplify making C# function delegate burst compatible.
+
+PositionOnlyVariant
+A serialization strategy for LocalTransform that replicates only the entity Position.
+
+PositionRotationVariant
+A serialization strategy that replicates the entity Position and Rotation properties.
+
+PositionScaleVariant
+A serialization strategy that replicates the entity Position and Scale properties.
+
+PredictedGhost
+Component on client signaling that an entity is predicted (as opposed to interpolated). GhostMode GhostModeMask
+
+PredictedGhostComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+PredictedGhostSpawn
+Added to a PredictedGhostSpawnList singleton entity. Contains a transient list of ghosts that should be pre-spawned. Expects to be handled during the GhostSpawnClassificationSystem step. InternalBufferCapacity allocated to almost max out chunk memory. In practice, this capacity just needs to hold the maximum number of client-authored ghost entities per frame, which is typically in the range 0 - 1.
+
+PredictedGhostSpawnList
+Tag added to the singleton entity that contains the PredictedGhostSpawn buffer.
+
+PredictedGhostSpawnRequest
+Optional component, used to request predictive spawn of a ghosts by the client. The component is automatically added to the authored ghost prefabs when:
+
+The baking target is NetcodeConversionTarget.Client or NetcodeConversionTarget.ClientAndServer.
+When using the hybrid authoring workflow, if the is Predicted or All.
+When using the ConvertToGhostPrefab(EntityManager, Entity, GhostPrefabCreation.Config, NativeParallelHashMap<GhostPrefabCreation.Component, GhostPrefabCreation.ComponentOverride>), if the SupportedGhostModes is set to Predicted or All.
+The predicted spawn request is consumed by PredictedGhostSpawnSystem, which will remove the component from the instantiated entity after an initial setup.
+The package provides a default handling for predictive spawning (Unity.NetCode.DefaultGhostSpawnClassificationSystem). In case you need a custom or more accurate way to match the predicted spawned entities with the authoritive server spawned ones, you can implement a custom spawn classification system. See GhostSpawnClassificationSystem for further details.
+PredictedGhostSpawnRequestComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+PredictedGhostSpawnSystem
+Consume all the PredictedGhostSpawnRequest requests by initializing the predicted spawned ghost and adding it to the PredictedGhostSpawn buffer. All the predicted spawned ghosts are initialized with a invalid ghost id (-1) but a valid ghost type and spawnTick.
+
+PredictedPhysicsNonGhostWorld
+If a singleton of this type exists in the world any non-ghost with dynamic physics in the default physics world on the client will be moved to the indicated physics world index. This is required because the predicted physics loop cannot process objects which are not rolled back.
+
+PredictedPhysicsValidationSystem
+A system used to detect invalid dynamic physics objects in the predicted physics world on clients. This system also moves entities to the correct world if PredictedPhysicsNonGhostWorld exists and is not 0.
+
+PreSerializedGhost
+Adding this component to a ghost will trigger pre-serialization for that ghost. Pre-serialization means that part of the serialization process happens before the regular serialization pass and can be done once for all connections. This can save some CPU time if the the ghost will generally be sent to more than one player every frame and it contains complex serialization (serialized data on child entities or buffers).
+
+PreSpawnedGhostIndex
+Unique within a subscene and used to deterministically assign ghost id to pre-spawned ghost entities.
+
+PrespawnSectionAck
+Component added by the server to to the NetworkStream entity. Used to track witch prespawned ghost sections has been loaded/acked by the client. The server streams prespawned ghost only for the sections that as been notified ready by the client.
+
+ReceiveRpcCommandRequest
+A component used to signal that an RPC has been received from a remote connection and should be processed.
+
+ReceiveRpcCommandRequestComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+RelevantGhostForConnection
+A connection-ghost pair, used to populate the GhostRelevancy set at runtime, by declaring which ghosts are relevant for a given connection. Behaviour is dependent upon on GhostRelevancyMode.
+
+RotationOnlyVariant
+A serialization strategy for LocalTransform that replicates only the entity Rotation.
+
+RotationScaleVariant
+A serialization strategy that replicates the entity Rotation and Scale properties.
+
+RpcCollection
+The RpcCollection is the set of all available RPCs. It is created by the RpcSystem. It is used to register RPCs and to get queues for sending RPCs. In most cases you do not need to use it directly, the generated code will use it to setup the RPC components.
+
+RpcCommandRequest<TActionSerializer, TActionRequest>
+Helper struct for implementing systems to process RPC command request entities. This is generally used by code-gen, and should only be used directly in special cases.
+
+RpcCommandRequest<TActionSerializer, TActionRequest>.SendRpcData
+A struct that can be embedded into your system job, and should be used to delegate the rpc handling. Example of use:
+
+[BurstCompile]
+struct SendRpc : IJobChunk
+{
+    public RpcCommandRequest{MyRpcCommand, MyRpcCommand}.SendRpcData data;
+    public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
+    {
+        data.Execute(chunk, unfilteredChunkIndex);
+    }
+}
+Always use the InitJobData(ref SystemState) method to construct a valid instance.
+
+RpcDeserializerState
+Interop struct used to pass additional data to the Deserialize(ref DataStreamReader, in RpcDeserializerState, ref T) method.
+
+RpcExecutor
+Struct that can be used to simplify writing systems and jobs that deserialize and execute received rpc commands.
+
+RpcExecutor.Parameters
+Struct used as argument to the rpc execute method (see the RpcExecutor.ExecuteDelegate delegate). Contains the input data stream, the receiving connection, and other useful data that can be used to decode and write your rpc logic.
+
+RpcQueue<TActionSerializer, TActionRequest>
+A helper struct that should be used schedule outgoing RPCs. The RpcQueue is used internally by the code-generated systems that consume the SendRpcCommandRequest requests, and allow you to serialize the rpc (that will be sent into the OutgoingRpcDataStreamBuffer for the outgoing connection).
+
+You can use the RpcQueue in your custom system by retrieving an instance for the given TActionRequest, TActionSerializer pair from the RpcCollection by calling the GetRpcQueue<TActionSerializer, TActionRequest>() method.
+
+The typename of the struct implementing the IRpcCommandSerializer<T> interface for the TActionRequest The typename of a struct implementing the IComponentData interface
+
+RpcSerializerState
+Interop struct used to pass additional data to the Serialize(ref DataStreamWriter, in RpcSerializerState, in T) method.
+
+RpcSystem
+The system responsible for sending and receiving RPCs.
+
+The RpcSystem flushes all the outgoing RPCs scheduled in the OutgoingRpcDataStreamBuffer for all the active connections. Multiple RPCs can be raised by a world (to be sent in a single frame) to each connection. Therefore, in order to reduce the number of in-flight reliable messages, the system tries to coalesce multiple RPCs into a single packet.
+
+Because packet queue size is limited (SendQueueCapacity and NetworkConfigParameter), the number of available packets may not be sufficient to flush the queue entirely. In that case, the pending messages are going to attempt to be sent during the next frame (recursively) (or when a resource is available).
+
+When an rpc packet is received, it is first handled by the NetworkStreamReceiveSystem, which decodes the incoming network packet and appends it to the IncomingRpcDataStreamBuffer for the connection that received the message. The RpcSystem will then dequeue all the received messages, and dispatch them by invoking their execute method (IRpcCommandSerializer<T> and RpcExecutor).
+
+RpcSystemErrors
+A system responsible for handling all the Unity.NetCode.RpcSystem.ProtocolVersionError created by the RpcSystem while receiving rpcs.
+
+The connection that generated the Unity.NetCode.RpcSystem.ProtocolVersionError will be disconnected, by adding a NetworkStreamRequestDisconnect component, and a verbose error message containing the following is reported to the application:
+
+- The local protocol.
+
+- The remote protocol.
+
+- The list of all registered rpc.
+
+- The list of all registered serializer.
+
+SendRpcCommandRequest
+A component used to signal that an RPC is supposed to be sent to a remote connection and should not be processed.
+
+SendRpcCommandRequestComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+ServerPopulatePrespawnedGhostsSystem
+Responsible for assigning a unique ghostId to each pre-spawned ghost, and and adding the ghosts to the spawned ghosts maps. Relies on the previous initializations step to determine the subscene subset to process.
+
+ServerTrackLoadedPrespawnSections
+The ServerTrackLoadedPrespawnSections is responsible for tracking when an initialized prespawn sections is unloaded in order to release any allocated data and freeing ghost id ranges.
+
+SharedGhostTypeComponent
+Temporary type, used to upgrade to new component type, to be removed before final 1.0
+
+SimulatorPreset
+Presets for the com.unity.transport simulator. Allows developers to simulate a variety of network conditions. AppendBaseSimulatorPresets(List<SimulatorPreset>) AppendAdditionalMobileSimulatorProfiles(List<SimulatorPreset>)
+
+SnapshotData
+Component present only for ghosts spawned by the client, tracking the latest SnapshotDataBuffer history slot used to store the incoming ghost snapshots from the server.
+
+SnapshotData.DataAtTick
+Internal use only.
+
+SnapshotDataBuffer
+A data structure used to store ghosts snapshot buffers data content. Typically around 1-12kb per entity. Thus, we always allocate on the heap.
+
+SnapshotDynamicBuffersHelper
+Helper class for managing ghost buffers data. Internal use only.
+
+SnapshotDynamicDataBuffer
+A data structure used to store ghosts dynamic buffers data content. BeginArray(SnapshotHistorySize] uint dataSize, (16 bytes aligned) current serialized data length for each slot. Used for delta compression EndArray BeginArray(SnapshotHistorySize] for each buffers: uint[maskBits] elements change bitmask byte[numElements] serialized buffers data EndArray The buffer grow in size as necessary to accomodate new data. All slots have the same size, usually larger than the data size. The serialized element size is aligned to the 16 bytes boundary
+
+SpawnedGhost
+Struct used to uniquely identify a ghost given its id and spawning time.
+
+SpawnedGhostEntityMap
+Singleton entity used store the entities references for all the spawned ghost.
+
+SubSceneGhostComponentHash
+The hash of all the ghost component data which exists in the scene. This can be used to sort the subscenes so the ghost IDs of the pre-spawned scene objects line up deterministically.
+
+SubSceneWithPrespawnGhosts
+Added during conversion to all subscenes that contains pre-spawned ghosts.
+
+SwitchPredictionSmoothing
+A struct that is temporarily added to a ghosts entity when it switching between predicted / interpolated mode. Added by GhostPredictionSwitchingSystem while processing the GhostPredictionSwitchingQueues.
+
+SwitchPredictionSmoothingSystem
+System that manage the prediction transition for all ghost that present a SwitchPredictionSmoothing components.
+
+The system applying a visual smoohting to the ghost, by modifying the entity LocalToWorld matrix. When the transition is completed, the system removes the SwitchPredictionSmoothing component.
+
+TransformDefaultVariant
+The default serialization strategy for the LocalTransform components provided by the NetCode package.
+
+UniqueInputTickMap
+This singleton is used by code-gen. It stores a mapping of which ticks the client has changes to inputs so steps in the prediction loop can be batched when inputs are not changing.
+
+UnscaledClientTime
+Component added to the NetworkTime singleton entity when it is created in a client world. Contains the unscaled application ElapsedTime and DeltaTime.
+
+Interfaces
+ICommandData
+Commands (usually inputs) that must be sent from client to server to control an entity (or any other thing) should implement the ICommandData interface.
+
+Prefer using the ICommandData over Rpc if you need to send a constant stream of data from client to server, as it's optimized for this use-case.
+
+Prefer to keep this type as small as possible, as it scales exponentially with player count and tickrate.
+
+ICommandData, being a subclass of IBufferElementData, can also be serialized from the server to the clients. It also natively supports the presence of the GhostComponentAttribute and GhostFieldAttribute attributes. As such, the same rule for buffers apply: if the command buffer must be serialized, then all fields must be annotated with a GhostFieldAttribute. Failure to do so will generate code-generation errors.
+
+However, differently from a normal GhostComponent, ICommandData buffers are not replicated from the server to all clients by default. Instead, in the absence of a GhostComponentAttribute governing the serialization behavior, the following set of default rules are used:
+
+- PrefabType is set to All. The buffer is present on all the ghost variant.
+
+- SendTypeOptimization is set to OnlyPredictedClients. Only predicted ghost can receive the buffer and interpolated variant will have the component stripped or disabled.
+
+- OwnerSendType is set to SendToNonOwner. If the ghost has an owner, is sent only to the clients who don't own the ghost.
+
+Is generally not recommended to send back to the ghost owner its own commands. For that reason, setting the SendToOwner flag will be reported as a error and ignored. Also, because they way ICommandData works, some care must be used when setting the PrefabType property:
+
+- Server: While possible, does not make much sense. A warning will be reported.
+
+- Clients: The ICommandData buffer is stripped from the server ghost. A warning will be reported.
+
+- InterpolatedClient: ICommandData buffers are stripped from the server and predicted ghost. A warning will be reported.
+
+- Predicted: ICommandData buffers are stripped from the server and predicted ghost. A warning will be reported.
+
+- AllPredicted: Interpolated ghost will not have the command buffer.
+
+- All: All ghost will have the command buffer.
+
+ICommandDataSerializer<T>
+Interface that must be implemented to serialize/deserialize ICommandData. Usually commands serialization / deserialization is automatically generated, unless a NetCodeDisableCommandCodeGenAttribute is added to the command struct to opt-in for manual serializaton. If you enable manual serializaton, you must create a public struct that implement the ICommandDataSerializer for your type, as well as the necessary send and received systems in order to have your RPC sent and received.
+
+IGhostComponentSerializerRegistration
+For internal use only. The interface for all the code-generated ISystems responsible for registering all the generated component serializers into the GhostComponentSerializerCollectionSystemGroup.
+
+IInputBufferData
+Interface used to handle automatic input command data setup with the IInputComponentData style inputs. This is used internally by code generation, don't use this directly.
+
+IInputComponentData
+A special component data interface used for storing player inputs.
+
+INetworkStreamDriverConstructor
+Factory interface that needs to be implemented by a concrete class for creating and registering new NetworkDriver instances.
+
+IRpcCommand
+An interface that should be used to declare a Rpc struct.
+
+RPCs are "one-shot" messages that can be sent and received by both the client and server, and can be used for different purposes. E.g. Implementing a lobby, loading level logic, requesting to spawn a player etc. Unlike ghost SnapshotData, rpc messages are sent using a dedicated reliable channel and are therefore guaranteed to be received.
+
+As they're reliable messages, RPCs are not meant to be used as a replacement for ghosts, nor for sending data that will change frequently, nor player commands (ICommandData and IInputComponentData). Why not? 1) There is a maximum number of reliable packets that can be in-flight at any given time. 2) Latency is introduced by the ordering guarantee of the reliability pipeline.
+
+An RPC struct can contain any number of burst-compatible fields. However, once serialized, its size must fit into a single packet. Large messages are not supported ( and account for header sizes).
+
+It is possible to partially mitigate this limitation by creating a custom INetworkStreamDriverConstructor and setting a larger MTU (but that will only work in favourable conditions and networks (ensure thorough testing!)) or by adding a stage into the reliable pipeline (channel).
+
+Usage: To send an RPC declared using the IRpcCommand interface, you should create a new entity with your rpc message component, as well as a SendRpcCommandRequest (which will notify the NetCode system that it exists, and send it). It is best to do this with an archetype to avoid runtime structural changes:
+
+m_RpcArchetype = EntityManager.CreateArchetype(..);
+
+var ent = EntityManager.CreateEntity(m_RpcArchetype);
+EntityManager.SetComponentData(new MyRpc { SomeData = 5 });
+RPCs declared using the IRpcCommand will have serialization and other boilerplate code for handling the SendRpcCommandRequest request automatically generated. For example:
+
+public struct MyRpc : IRpcCommand
+{
+   public int SomeData;
+}
+will generate the following systems and structs:
+
+- A struct implementing the IRpcCommandSerializer<T> for your rpc type.
+
+- A system responsible for consuming the SendRpcCommandRequest requests, and queuing the messages into the OutgoingRpcDataStreamBuffer stream (for the outgoing connection). (RpcQueue<TActionSerializer, TActionRequest>).
+
+Because the serialization is generated by our source generator, only types recognized by the code-generation system (and that are available to use inside commands and rpcs) are going to be serialized. See TypeRegistryEntry for other details.
+
+The OutgoingRpcDataStreamBuffer is processed at the end of the simulation frame by the RpcSystem, and all messages in queue attempt to be sent over the network (assuming the reliable buffer is not full, as mentioned).
+
+To distinguish between a "broadcast" RPC and an "RPC sent to a specific client", see SendRpcCommandRequest.
+
+IRpcCommandSerializer<T>
+Interface that must be implemented by a burst-compatible struct to serialize/deserialize the specified rpc type.
+
+A common pattern is to make the struct declaring the rpc to also implement the serialize/deserialize interface. For example:
+
+struct MyRpc : IComponentData, IRpcCommandSerializer{MyRpc}
+{
+    public void Serialize(ref DataStreamWriter writer, in RpcSerializerState state, in MyRpc data)
+    { ... }
+    public void Deserialize(ref DataStreamReader reader, in RpcDeserializerState state, ref MyRpc data)
+    { ... }
+    PortableFunctionPointer{RpcExecutor.ExecuteDelegate} CompileExecute()
+    { ... }
+}
+When declaring an rpc using the IRpcCommand interface, it is not necessary to implement the IRpcCommandSerializer interface yourself; the code-generation will automatically create a struct implementing the interface and all necessary boilerplate code.
+Enums
+ClientServerBootstrap.PlayType
+The current modality
+
+ClientServerTickRate.FrameRateMode
+Enum to control how the simulation should deal with running at a higher frame rate than simulation rate.
+
+ComponentTypeSerializationStrategy.DefaultType
+Denotes why this strategy is the default (or not). Higher value = more important.
+
+ConnectionState.State
+The current state of the connection.
+
+GhostCollectionPrefab.LoadingState
+Ghost prefabs can be added dynamically to the ghost collection as soon as they are loaded from either a sub-scene, or created dynamically at runtime. This enum is used on the clients, to signal the ghost collection system that the GhostCollectionPrefab type is being loaded into the world
+
+GhostMode
+The Current Ghost Mode of a Ghost, on any given client. Denotes replication and prediction rules.
+
+GhostModeMask
+Stores the Supported Ghost Mode by a ghost at authoring time.
+
+- Interpolated:
+
+- Predicted:
+
+- All:
+
+GhostOptimizationMode
+Specify if the ghost replication should be optimized for frequent (dynamic) or for infrequent (static) data changes.
+
+
+
+GhostPrefabCreation.ComponentOverrideType
+Identifier for a type of modifier, the types can be combined using "or" and serves as a mask.
+
+GhostPrefabType
+Assign to every GhostInstance, and denotes which Ghost prefab version this component is allowed to exist on. Use this to disable rendering components on the Server version of the Ghost. If you cannot change the ComponentType, use the GhostAuthoringInspectionComponent to manually override on a specific Ghost prefab.
+
+GhostRelevancyMode
+Specify how the ghosts added to the relevancy set should be used.
+
+GhostSendType
+An optimization: Set on each GhostComponent via the GhostComponentAttribute (or via a variant).
+
+When a Ghost is OwnerPredicted, OR its SupportedGhostModes is known at compile time, this flag will filter which types of clients will receive data updates.
+
+Maps to the GhostMode of each Ghost.
+
+Note that this optimization is not available to Ghosts that can have their GhostMode modified at runtime!
+
+GhostSpawnBuffer.Type
+The ghost mode to use to spawn th entity
+
+NetDebug.LogLevelType
+The available NetCode logging levels. Notify is the default. Use the NetCodeDebugConfig component to configure the logging level.
+
+NetworkStreamDisconnectReason
+NetworkStreamProtocol
+The message types sent by NetCode.
+
+NetworkTimeFlags
+Flags used by NetworkTime singleton to add some properties to the current simulated tick. See the individual flags documentation for further information.
+
+SendToOwnerType
+Meta-data of a ICommandData component, denoting whether or not the server should replicate the input commands back down to clients. Configure via GhostComponentAttribute.
+
+Docs for ICommandData:
+
+SmoothingAction
+Denotes how GhostFieldAttribute values are deserialized when received from snapshots.
+
+TransportType
+The transport category/type use by a NetworkDriver.
+
+Delegates
+GhostImportance.ScaleImportanceDelegate
+Scale importance delegate. This describes the interface GhostSendSystem will use to compute importance scaling. The higher importance value returned from this method, the more often a ghost's data is synchronized. See GhostDistanceImportance for example implementation.
+
+GhostPredictionSmoothing.SmoothingActionDelegate
+All the smoothing action must have this signature. The smoothing actions must also be burst compatible.
+
+NetworkDriverStore.DriverVisitor
+Signature for all functions that can be used to visit the registered drivers in the store using the ForEachDriver(NetworkDriverStore.DriverVisitor) method. a reference to a NetworkDriverStore.NetworkDriverInstance the id of the driver
+
+RpcExecutor.ExecuteDelegate
+The reference to static burst-compatible method that is invoked when an rpc has been received. For example:
+
+    [BurstCompile(DisableDirectCall = true)]
+    [AOT.MonoPInvokeCallback(typeof(RpcExecutor.ExecuteDelegate))]
+    private static void InvokeExecute(ref RpcExecutor.Parameters parameters)
